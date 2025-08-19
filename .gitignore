@@ -1,0 +1,54 @@
+# GNTECH Jellyfin Guardian - Git Ignore File
+
+# Backup files and directories
+*.tar.gz
+*.tar.bz2
+*.zip
+jellyfin-backups/
+backups/
+
+# Log files
+*.log
+logs/
+.local/
+
+# Configuration files with sensitive data
+*.conf.local
+*.env
+.env
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# SSH keys and credentials
+*.pem
+*.key
+id_rsa*
+known_hosts
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Archive and old versions (keep structure but ignore contents)
+archive/*/
+!archive/.gitkeep
+
+# Test data
+test-data/
+sample-backups/

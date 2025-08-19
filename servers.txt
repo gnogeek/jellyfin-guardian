@@ -1,0 +1,22 @@
+# Server List for GNTECH Jellyfin Backup Deployment
+# Format: [user@]server_address
+# Lines starting with # are comments and will be ignored
+
+# Production Servers
+root@jellyfin-prod-01.example.com
+root@jellyfin-prod-02.example.com
+admin@jellyfin-prod-03.example.com
+
+# Staging Servers
+admin@jellyfin-staging-01.example.com
+root@jellyfin-staging-02.example.com
+
+# Development Servers
+developer@jellyfin-dev-01.example.com
+root@192.168.1.100
+root@192.168.1.101
+
+# Example entries (remove these and add your actual servers)
+# user@server.domain.com
+# 192.168.1.50
+# jellyfin.local
