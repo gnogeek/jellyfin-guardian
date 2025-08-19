@@ -1,326 +1,276 @@
-# GNTECH Jellyfin Guardian
+# 🛡️ GNTECH Jellyfin Guardian
 
-[![Version](https://img.shields.io/badge/version-2.2-blue.svg)](https://github.com/gntech/jellyfin-guardian)
+**Enterprise-grade backup solution for Jellyfin media servers with intelligent remote storage and automated retention policies.**
+
+[![Version](https://img.shields.io/badge/version-2.2-blue.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Shell](https://img.shields.io/badge/shell-bash-orange.svg)](https://www.gnu.org/software/bash/)
-[![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)](https://www.linux.org/)
+[![Docker](https://img.shields.io/badge/docker-compatible-blue.svg)](https://docker.com)
 
-🛡️ **Professional-grade backup guardian for Jellyfin containers** - Enterprise backup solution with database verification, real-time progress tracking, and intelligent compression.
+## ✨ Features
 
-## 🌟 Why Jellyfin Guardian?
+### 🔄 **Comprehensive Backup Management**
+- **Automated container discovery** - Finds Jellyfin containers automatically
+- **Safe container handling** - Optional container stop/start for data integrity
+- **Database verification** - SQLite integrity checks before backup
+- **Intelligent compression** - Parallel compression with pigz/gzip fallback
+- **Detailed logging** - Session logs + backup-specific log files
 
-Jellyfin Guardian is not just another backup script. It's a comprehensive data protection solution designed specifically for Jellyfin media servers running in Docker containers. Born from real-world enterprise requirements, it provides military-grade reliability with user-friendly operation.
+### ☁️ **Advanced Remote Storage**
+- **Multi-provider support** - SFTP, S3-compatible, NFS, FTP, rclone
+- **Intelligent retention** - Local: 1 backup, Remote: 3 backups
+- **Automatic cleanup** - Space management with configurable policies
+- **Upload verification** - Ensure backup integrity after transfer
+- **Connection testing** - Validate remote storage before backup
 
-### 🎯 Key Differentiators
+### 🤖 **Flexible Automation**
+- **User-level automation** - Crontab or systemd user services (no root required)
+- **System-wide automation** - Enterprise systemd services with timers
+- **Interactive configuration** - Guided setup for all storage providers
+- **Command-line interface** - Full CLI support for scripting
 
-- **🔬 Pre-backup Database Verification** - Prevents backing up corrupted SQLite databases
-- **⚡ High-Performance Pipeline** - 239MiB/s compression speeds with direct streaming
-- **🛡️ Zero-Downtime Safety** - <10 second container stops with graceful restart
-- **📊 Real-time Progress** - Live progress bars with ETA and transfer rates
-- **🤖 Auto-dependency Management** - Installs prerequisites automatically
-- **📝 Comprehensive Logging** - Session logs + backup-specific log files
-- **☁️ Multi-Provider Remote Storage** - SFTP, S3, NFS, FTP, rclone support
-- **🗄️ Intelligent Retention** - Local (1) + Remote (3) backup policies
+### 🔐 **Security & Permissions**
+- **Docker group support** - Works without root privileges
+- **Permission validation** - Comprehensive pre-flight checks
+- **SSH key authentication** - Secure remote deployment
+- **Configurable exclusions** - Skip temp files, logs, cache directories
 
 ## 🚀 Quick Start
 
-### One-Line Installation
+### 📥 Installation
+
 ```bash
-# Clone and deploy to remote server
-git clone https://github.com/gntech/jellyfin-guardian.git
+# Clone the repository
+git clone https://github.com/yourusername/jellyfin-guardian.git
 cd jellyfin-guardian
-chmod +x jellyfin-backup.sh deploy.sh
-./deploy.sh
+
+# Install for current user (recommended)
+./install.sh
+
+# Or install system-wide (requires sudo)
+sudo ./install.sh
 ```
 
-### Local Installation
+### ⚙️ Basic Usage
+
 ```bash
-git clone https://github.com/gntech/jellyfin-guardian.git
-cd jellyfin-guardian
-chmod +x jellyfin-backup.sh
-./jellyfin-backup.sh --help
+# Interactive mode
+jellyfin-guardian
+
+# Backup all containers
+jellyfin-guardian --all
+
+# Backup specific container
+jellyfin-guardian --container jellyfin_main
+
+# List available containers
+jellyfin-guardian --list
+
+# Clean old backups
+jellyfin-guardian --cleanup
 ```
 
-## 📋 Features Overview
+### ☁️ Remote Storage Setup
 
-### 🔧 Core Functionality
-- **Container Discovery**: Automatic Jellyfin container detection
-- **Interactive Selection**: Choose specific containers or backup all
-- **Database Integrity**: SQLite PRAGMA checks before backup
-- **Smart Compression**: Parallel compression with pigz/gzip fallback
-- **Progress Tracking**: Real-time progress with pv integration
-- **Container Safety**: Graceful stop/start with status monitoring
+```bash
+# Interactive remote storage configuration
+jellyfin-guardian --configure-remote
 
-### 🛡️ Enterprise Features
-- **Audit Logging**: Comprehensive session and backup-specific logs
-- **Error Recovery**: Automatic rollback on failures
-- **Configuration Management**: CLI options and config file support
-- **Remote Deployment**: SSH-optimized for remote server management
-- **Resource Monitoring**: Disk space and system load tracking
-- **Retention Management**: Configurable backup retention policies
+# Test remote storage connection
+jellyfin-guardian --test-remote
 
-## 📊 Performance Benchmarks
-
-```
-Test Environment: 4-core CPU, 16GB RAM, SSD storage
-Container Size: 23GB (Jellyfin with metadata and artwork)
-
-Results:
-├── Compression Speed: 239MiB/s (parallel pigz)
-├── Size Reduction: 13% (23GB → 20GB)
-├── Container Downtime: <10 seconds
-├── Database Verification: <5 seconds
-└── Total Backup Time: 1m 34s
+# Backup with remote storage disabled
+jellyfin-guardian --no-remote --all
 ```
 
-## 🏗️ Architecture
+## 📁 Project Structure
 
-### Backup Pipeline
-```
-1. Prerequisites Check → Auto-install missing tools
-2. Container Discovery → Scan for Jellyfin containers  
-3. Database Verification → SQLite integrity checks
-4. Container Management → Safe stop if running
-5. Direct Compression → tar | pv | pigz > backup.tar.gz
-6. Container Restart → Restore original state
-7. Log Generation → Create detailed backup report
-8. Verification → Confirm backup integrity
-```
-
-### Directory Structure
 ```
 jellyfin-guardian/
-├── jellyfin-backup.sh              # Main backup script
-├── deploy.sh                       # Remote deployment script
-├── install.sh                      # Local installation script
-├── jellyfin-backup.conf            # Configuration template
-├── servers.txt                     # Server list for batch operations
-├── README.md                       # This file
-├── CHANGELOG.md                    # Version history
-├── LICENSE                         # MIT License
-└── archive/                        # Historical versions
-    ├── old-versions/               # Previous script versions
-    ├── deprecated/                 # Deprecated features
-    └── test-scripts/               # Development test scripts
+├── jellyfin-backup.sh           # Main backup script
+├── install.sh                   # Installation script
+├── README.md                    # This file
+├── CHANGELOG.md                 # Version history
+├── LICENSE                      # MIT License
+├── config/                      # Configuration templates
+│   ├── jellyfin-backup.conf            # Main configuration
+│   └── jellyfin-backup-remote.conf     # Remote storage config
+├── scripts/                     # Utility scripts
+│   ├── configure-remote.sh             # Remote storage setup
+│   ├── deploy.sh                       # Remote deployment
+│   └── test-deployment.sh              # Deployment testing
+├── examples/                    # Example configurations
+│   ├── servers.example.txt             # Server list template
+│   └── jellyfin-backup-remote.example.conf  # Full config example
+├── docs/                        # Documentation
+│   ├── PROJECT-SUMMARY.md              # Technical overview
+│   └── CONTRIBUTING.md                 # Contribution guidelines
+└── archive/                     # Historical versions
+    ├── deprecated/                     # Deprecated scripts
+    ├── old-versions/                   # Previous versions
+    └── test-scripts/                   # Development tests
 ```
 
-## 💻 Usage Examples
+## 🎯 Use Cases
 
-### Interactive Mode (Recommended)
+### 🏠 **Home Users**
 ```bash
-./jellyfin-backup.sh
-# Follow the interactive prompts for safe, guided backup
+# Simple daily backup with user automation
+./install.sh  # Choose: y -> 1 (crontab)
+jellyfin-guardian --configure-remote  # Setup cloud storage
+# Automated daily backups at 2 AM
 ```
 
-### Command Line Operations
+### 🏢 **Enterprise Deployments**
 ```bash
-# Backup specific container
-./jellyfin-backup.sh -c vfx
-
-# Backup all containers with compression
-./jellyfin-backup.sh --all
-
-# Dry run to see what would be backed up
-./jellyfin-backup.sh --dry-run --all
-
-# Backup without stopping containers (risky)
-./jellyfin-backup.sh -c jellyfin_main --no-stop
-
-# Backup without compression for speed
-./jellyfin-backup.sh -c vfx --no-compress
+# System-wide installation with remote deployment
+sudo ./install.sh
+# Deploy to multiple servers
+scripts/deploy.sh --servers production-servers.txt
+# Monitor via systemd
+sudo systemctl status jellyfin-guardian.timer
 ```
 
-### Remote Deployment
+### 🔧 **Development & Testing**
+```bash
+# Test deployment without production impact
+scripts/test-deployment.sh --check-permissions
+scripts/test-deployment.sh --deploy --test
+# Dry run before actual backup
+jellyfin-guardian --dry-run --all
+```
+
+## 🛠️ Configuration
+
+### 📋 **Remote Storage Providers**
+
+| Provider | Authentication | Features |
+|----------|---------------|----------|
+| **SFTP** | SSH Keys | ✅ Reliable, secure, widely supported |
+| **S3-Compatible** | Access/Secret Keys | ✅ AWS S3, MinIO, DigitalOcean Spaces |
+| **NFS** | Network Mount | ✅ High performance, local network |
+| **FTP** | Username/Password | ✅ Legacy support, simple setup |
+| **Rclone** | Provider Config | ✅ 70+ cloud providers supported |
+
+### ⚙️ **Configuration Files**
+
+- **`config/jellyfin-backup.conf`** - Main backup settings
+- **`config/jellyfin-backup-remote.conf`** - Remote storage configuration
+- **`examples/`** - Example configurations for all providers
+
+### 🕒 **Automation Options**
+
+#### **User-Level (No Root Required)**
+```bash
+# Crontab (recommended)
+crontab -l  # View current jobs
+crontab -e  # Edit schedule
+
+# Systemd user service
+systemctl --user enable jellyfin-guardian.timer
+systemctl --user start jellyfin-guardian.timer
+```
+
+#### **System-Level (Root Required)**
+```bash
+sudo systemctl enable jellyfin-guardian.timer
+sudo systemctl start jellyfin-guardian.timer
+```
+
+## 📊 Command Reference
+
+### 🎮 **Interactive Options**
+- **Container Discovery** - Find and list Jellyfin containers
+- **Selective Backup** - Choose specific containers
+- **Mount Inspection** - View container volume mounts
+- **Settings Configuration** - Modify backup behavior
+- **Remote Storage Setup** - Configure cloud/network storage
+- **Backup History** - View previous backup information
+- **Cleanup Management** - Remove old backups safely
+
+### 💻 **Command Line Interface**
+
+```bash
+jellyfin-guardian [OPTIONS]
+
+Options:
+  -c, --container NAME      Backup specific container
+  -a, --all                 Backup all Jellyfin containers
+  -l, --list                List discovered containers only
+  -n, --no-stop             Don't stop containers during backup
+  -d, --backup-dir DIR      Override backup directory
+  --no-compress             Skip compression of backup
+  --no-verify               Skip database integrity verification
+  --configure-remote        Run interactive remote storage setup
+  --test-remote             Test remote storage connection
+  --no-remote               Disable remote storage for this run
+  --local-only              Keep local backups (don't delete after upload)
+  --cleanup                 Clean up all existing backups
+  --dry-run                 Show what would be backed up without doing it
+  -v, --version             Show version information
+  -h, --help                Show help message
+```
+
+## 🔧 Advanced Usage
+
+### 🌐 **Remote Deployment**
 ```bash
 # Deploy to single server
-./deploy.sh
+scripts/test-deployment.sh --full
 
-# Batch deployment (edit servers.txt first)
-./deploy.sh --batch
+# Deploy to multiple servers
+scripts/deploy.sh --servers examples/servers.example.txt
+
+# Test permissions only
+scripts/test-deployment.sh --check-permissions
 ```
 
-## ☁️ Remote Storage
-
-### Supported Providers
-- **SFTP/SSH**: Secure, reliable (recommended)
-- **S3-Compatible**: AWS S3, MinIO, DigitalOcean Spaces
-- **Network File System**: NFS mounts
-- **FTP/FTPS**: Traditional file transfer
-- **Cloud Storage**: Google Drive, Dropbox via rclone
-
-### Quick Setup
+### 📈 **Monitoring & Logs**
 ```bash
-# Interactive configuration wizard
-./jellyfin-backup.sh --configure-remote
-
-# Test your configuration
-./jellyfin-backup.sh --test-remote
-
-# Run backup with remote storage
-./jellyfin-backup.sh -c container_name
-```
-
-### Retention Strategy
-- **Local**: Keep only latest backup (saves disk space)
-- **Remote**: Keep last 3 backups (redundancy & history)  
-- **Automatic**: Old backups cleaned up automatically
-
-### Example: SFTP Configuration
-```bash
-# Configuration prompts:
-SFTP server: backup.example.com
-Username: backup_user
-Remote path: /home/backups/jellyfin
-SSH key: ~/.ssh/backup_key
-
-# Results in:
-Local:  ~/jellyfin-backups/latest_backup.tar.gz
-Remote: backup.example.com:/home/backups/jellyfin/
-        ├── container_20250819_120000.tar.gz
-        ├── container_20250818_120000.tar.gz
-        └── container_20250817_120000.tar.gz
-```
-
-### Remote Storage Options
-```bash
-# Configure during first run (interactive)
-./jellyfin-backup.sh --configure-remote
-
-# Disable remote storage for one backup
-./jellyfin-backup.sh -c vfx --no-remote
-
-# Keep local backup (don't delete after upload)
-./jellyfin-backup.sh -c vfx --local-only
-
-# Test connection without backup
-./jellyfin-backup.sh --test-remote
-```
-
-## 📝 Log Files
-
-### Session Logs
-```bash
-# View live backup activity
+# View session logs
 tail -f ~/.local/log/gntech-jellyfin-backup.log
+
+# Check systemd logs
+journalctl --user -u jellyfin-guardian.service
+
+# Backup-specific logs (created alongside .tar.gz files)
+ls -la ~/backups/jellyfin/*.log
 ```
 
-### Backup-Specific Logs
-Each backup creates a detailed log file alongside the compressed backup:
-```
-~/jellyfin-backups/20250819_164718/
-├── vfx_20250819_164718.tar.gz      # Compressed backup
-└── vfx_20250819_164718.log         # Detailed backup report
-```
-
-**Log Contents:**
-- Container information and configuration
-- Backup size statistics and compression ratios  
-- System information (disk space, load averages)
-- Complete session log entries for troubleshooting
-- Error details and recovery procedures
-
-## ⚙️ Configuration
-
-### Environment Variables
+### 🔄 **Backup Verification**
 ```bash
-export BACKUP_BASE_DIR="/custom/backup/path"
-export STOP_CONTAINER_FOR_BACKUP=true
-export METADATA_INTEGRITY_CHECK=true
-export ENABLE_COMPRESSION=true
-export COMPRESSION_LEVEL=6
-```
+# Test backup without execution
+jellyfin-guardian --dry-run --all
 
-### Configuration File
-Edit `jellyfin-backup.conf` for persistent settings:
-```bash
-# GNTECH Jellyfin Backup Configuration
-BACKUP_BASE_DIR="$HOME/jellyfin-backups"
-STOP_CONTAINER_FOR_BACKUP=true
-METADATA_INTEGRITY_CHECK=true
-BACKUP_RETENTION_DAYS=7
-ENABLE_COMPRESSION=true
-COMPRESSION_LEVEL=6
-```
+# Verify database integrity
+jellyfin-guardian --container jellyfin_main --no-compress
 
-## 🔧 Prerequisites
-
-### Automatically Installed
-- `sqlite3` - Database integrity verification
-- `pv` - Progress visualization  
-- `pigz` - Parallel compression
-- `rsync` - File synchronization
-
-### System Requirements
-- **OS**: Linux (Ubuntu, Debian, CentOS, etc.)
-- **Docker**: Running Docker daemon
-- **Disk Space**: 2x largest container size
-- **Memory**: 1GB+ recommended
-- **Network**: SSH access for remote deployment
-
-## 🚨 Safety Features
-
-### Database Protection
-- Pre-backup SQLite integrity verification
-- PRAGMA quick_check and integrity_check
-- Automatic backup abortion on corruption detection
-
-### Container Safety
-- Graceful container stopping with timeout
-- Status verification before and after operations
-- Automatic restart with health checks
-- User confirmation for destructive operations
-
-### Error Handling
-- Comprehensive rollback mechanisms
-- Detailed error logging and reporting
-- Automatic cleanup on failures
-- Resource monitoring and alerts
-
-## 🔄 Backup Process Flow
-
-```mermaid
-graph TD
-    A[Start Backup] --> B[Check Prerequisites]
-    B --> C[Discover Containers]
-    C --> D[Verify Database Integrity]
-    D --> E{Database OK?}
-    E -->|No| F[Abort & Log Error]
-    E -->|Yes| G[Stop Container Safely]
-    G --> H[Create Compressed Backup]
-    H --> I[Restart Container]
-    I --> J[Verify Backup]
-    J --> K[Generate Log Report]
-    K --> L[Complete Successfully]
-    F --> M[End with Error]
-    L --> N[End Success]
+# Test remote storage
+jellyfin-guardian --test-remote
 ```
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our contributing guidelines:
+We welcome contributions! Please see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+### 🏗️ **Development Setup**
+```bash
+git clone https://github.com/yourusername/jellyfin-guardian.git
+cd jellyfin-guardian
+# Make changes and test
+./jellyfin-backup.sh --dry-run --list
+```
 
-## 📄 License
+## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🏢 About GNTECH Solutions
+## 🎯 Support
 
-GNTECH Solutions specializes in enterprise infrastructure automation and data protection solutions. Jellyfin Guardian represents our commitment to providing reliable, professional-grade tools for media server management.
-
-**Contact**: [GNTECH Solutions](https://github.com/gntech)
-
-## 🙏 Acknowledgments
-
-- Jellyfin team for creating an amazing media server
-- Docker community for containerization excellence
-- Open source contributors who make tools like pigz and pv possible
+- **📖 Documentation**: [docs/](docs/)
+- **🐛 Issues**: [GitHub Issues](https://github.com/yourusername/jellyfin-guardian/issues)
+- **💬 Discussions**: [GitHub Discussions](https://github.com/yourusername/jellyfin-guardian/discussions)
+- **📧 Email**: support@gntech.solutions
 
 ---
 
-⭐ **Star this repository if Jellyfin Guardian helped protect your media server!**
+**Made with ❤️ by GNTECH Solutions** | [🌐 Website](https://gntech.solutions) | [📚 Documentation](docs/)

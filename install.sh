@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# GNTECH Jellyfin Guardian - Local Installation Script
-# Version: 2.1 (Log Enhancement Release)
+# GNTECH Jellyfin Guardian - Enhanced Local Installation Script
+# Version: 2.2 (Remote Storage & User Automation Release)
 
 set -euo pipefail
 
-SCRIPT_VERSION="2.1"
+SCRIPT_VERSION="2.2"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="$HOME/.config/gntech"
 LOG_DIR="$HOME/.local/log"
@@ -20,6 +20,8 @@ echo
 if [[ $EUID -eq 0 ]]; then
     echo "[INFO] Installing system-wide (running as root)"
     INSTALL_TYPE="system"
+    CONFIG_DIR="/etc/gntech"
+    LOG_DIR="/var/log"
 else
     echo "[INFO] Installing for current user"
     INSTALL_DIR="$HOME/.local/bin"
@@ -43,25 +45,143 @@ cp jellyfin-backup.sh "$INSTALL_DIR/jellyfin-guardian"
 chmod +x "$INSTALL_DIR/jellyfin-guardian"
 
 # Install configuration file
-if [ -f "jellyfin-backup.conf" ]; then
+if [ -f "config/jellyfin-backup.conf" ]; then
     echo "[INFO] Installing configuration template..."
-    cp jellyfin-backup.conf "$CONFIG_DIR/"
+    cp config/jellyfin-backup.conf "$CONFIG_DIR/"
+fi
+
+# Install remote configuration file
+if [ -f "config/jellyfin-backup-remote.conf" ]; then
+    echo "[INFO] Installing remote storage configuration template..."
+    cp config/jellyfin-backup-remote.conf "$CONFIG_DIR/"
+fi
+
+# Install configuration script
+if [ -f "scripts/configure-remote.sh" ]; then
+    echo "[INFO] Installing remote configuration script..."
+    cp scripts/configure-remote.sh "$INSTALL_DIR/jellyfin-guardian-configure"
+    chmod +x "$INSTALL_DIR/jellyfin-guardian-configure"
 fi
 
 # Install deployment script
-if [ -f "deploy.sh" ]; then
+if [ -f "scripts/deploy.sh" ]; then
     echo "[INFO] Installing deployment script..."
-    cp deploy.sh "$INSTALL_DIR/jellyfin-guardian-deploy"
+    cp scripts/deploy.sh "$INSTALL_DIR/jellyfin-guardian-deploy"
     chmod +x "$INSTALL_DIR/jellyfin-guardian-deploy"
 fi
 
-# Add to PATH for user installation
+# User automation functions
+setup_user_automation() {
+    echo "[INFO] Setting up user-level automation..."
+    echo
+    read -p "Would you like to set up automatic daily backups? (y/N): " setup_auto
+    
+    if [[ "$setup_auto" =~ ^[Yy]$ ]]; then
+        echo "Choose automation method:"
+        echo "1. User crontab (recommended)"
+        echo "2. Systemd user service"  
+        echo "3. Both"
+        echo "4. Skip automation"
+        read -p "Enter choice (1-4): " auto_choice
+        
+        case $auto_choice in
+            1) setup_user_cron ;;
+            2) setup_user_systemd ;;
+            3) setup_user_cron && setup_user_systemd ;;
+            *) echo "[INFO] Skipping automation setup" ;;
+        esac
+    else
+        echo "[INFO] Skipping automation setup"
+        echo "[INFO] You can set up automation later:"
+        echo "  • Manual cron: crontab -e"
+        echo "  • Systemd user: systemctl --user enable jellyfin-guardian.timer"
+    fi
+}
+
+setup_user_cron() {
+    echo "[INFO] Setting up user crontab..."
+    
+    # Backup existing crontab
+    if crontab -l >/dev/null 2>&1; then
+        echo "[INFO] Backing up existing crontab"
+        crontab -l > "$HOME/.crontab.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    
+    # Add backup job (2 AM daily)
+    echo "[INFO] Adding daily backup job (2 AM)..."
+    (crontab -l 2>/dev/null || echo "# GNTECH Jellyfin Guardian - User Crontab") | \
+    { cat; echo "0 2 * * * $INSTALL_DIR/jellyfin-guardian --all >> $LOG_DIR/jellyfin-guardian-cron.log 2>&1"; } | \
+    crontab -
+    
+    echo "[SUCCESS] User crontab configured successfully"
+    echo "[INFO] View crontab: crontab -l"
+    echo "[INFO] Edit crontab: crontab -e"
+}
+
+setup_user_systemd() {
+    echo "[INFO] Setting up systemd user service..."
+    
+    # Create user systemd directory
+    local user_systemd_dir="$HOME/.config/systemd/user"
+    mkdir -p "$user_systemd_dir"
+    
+    # Create service file
+    cat > "$user_systemd_dir/jellyfin-guardian.service" << EOF
+[Unit]
+Description=GNTECH Jellyfin Guardian Backup Service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=$INSTALL_DIR/jellyfin-guardian --all
+StandardOutput=journal
+StandardError=journal
+Environment=HOME=$HOME
+Environment=PATH=$PATH
+
+[Install]
+WantedBy=default.target
+EOF
+
+    # Create timer file  
+    cat > "$user_systemd_dir/jellyfin-guardian.timer" << EOF
+[Unit]
+Description=GNTECH Jellyfin Guardian Backup Timer
+Requires=jellyfin-guardian.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    # Reload user systemd
+    systemctl --user daemon-reload
+    
+    echo "[SUCCESS] Systemd user service created"
+    echo "[INFO] Enable: systemctl --user enable jellyfin-guardian.timer"
+    echo "[INFO] Start: systemctl --user start jellyfin-guardian.timer"
+    echo "[INFO] Status: systemctl --user status jellyfin-guardian.timer"
+}
+
+# Handle user vs system installation
 if [ "$INSTALL_TYPE" = "user" ]; then
+    # Add to PATH for user installation
     if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
         echo "[INFO] Adding $HOME/.local/bin to PATH..."
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
         echo "[INFO] Please run: source ~/.bashrc or start a new terminal session"
     fi
+    
+    # Setup user automation
+    setup_user_automation
+    
+else
+    # System installation - add system-wide automation
+    echo "[INFO] System installation detected - would setup system services here"
+    echo "[INFO] For system automation, use: sudo systemctl enable jellyfin-guardian.timer"
 fi
 
 # Test installation
@@ -74,261 +194,48 @@ else
     exit 1
 fi
 
+# Show completion message
 echo
 echo "========================================"
 echo "🎉 Installation Complete!"
 echo "========================================"
 echo
-echo "Installed components:"
-echo "  • Main script: $INSTALL_DIR/jellyfin-guardian"
-echo "  • Deploy script: $INSTALL_DIR/jellyfin-guardian-deploy"
-echo "  • Config template: $CONFIG_DIR/jellyfin-backup.conf"
-echo "  • Log directory: $LOG_DIR"
-echo
-echo "Usage:"
-if [ "$INSTALL_TYPE" = "system" ]; then
-    echo "  jellyfin-guardian --help"
-    echo "  jellyfin-guardian-deploy"
+
+if [ "$INSTALL_TYPE" = "user" ]; then
+    echo "✅ User Installation Summary:"
+    echo "  • Main script: $INSTALL_DIR/jellyfin-guardian"
+    echo "  • Deploy script: $INSTALL_DIR/jellyfin-guardian-deploy"
+    echo "  • Configure script: $INSTALL_DIR/jellyfin-guardian-configure"
+    echo "  • Configuration: $CONFIG_DIR/"
+    echo "  • Logs: $LOG_DIR/"
+    echo
+    echo "🚀 Quick Start:"
+    echo "  source ~/.bashrc                    # Reload PATH"
+    echo "  jellyfin-guardian --version         # Test installation"
+    echo "  jellyfin-guardian                   # Interactive mode"
+    echo "  jellyfin-guardian --all             # Backup all containers"
+    echo "  jellyfin-guardian --cleanup         # Clean old backups"
+    echo "  jellyfin-guardian-configure         # Setup remote storage"
+    echo
+    echo "⏰ Automation (if configured):"
+    echo "  crontab -l                          # View cron jobs"
+    echo "  systemctl --user status jellyfin-guardian.timer   # Check systemd timer"
 else
-    echo "  ~/.local/bin/jellyfin-guardian --help"
-    echo "  jellyfin-guardian --help    (after reloading PATH)"
+    echo "✅ System Installation Summary:"
+    echo "  • Script installed to: $INSTALL_DIR/jellyfin-guardian"
+    echo "  • Configuration: $CONFIG_DIR/"
+    echo "  • Logs: $LOG_DIR/"
+    echo
+    echo "🚀 Quick Start:"
+    echo "  jellyfin-guardian --version         # Test installation"
+    echo "  sudo jellyfin-guardian              # Interactive mode"  
+    echo "  sudo jellyfin-guardian --all        # Backup all containers"
 fi
+
 echo
-echo "Quick start:"
-echo "  jellyfin-guardian              # Interactive mode"
-echo "  jellyfin-guardian --all        # Backup all containers"
-echo "  jellyfin-guardian --list       # List containers"
+echo -e "🎯 Next Steps:"
+echo "  1. Configure remote storage if needed"
+echo "  2. Test the backup functionality"
+echo "  3. Set up automated backups if desired"
 echo
-echo "For remote deployment:"
-echo "  jellyfin-guardian-deploy       # Deploy to remote server"
-echo
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-# Configuration
-INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="/etc/gntech"
-LOG_DIR="/var/log"
-BACKUP_DIR="/backup/jellyfin"
-SERVICE_NAME="gntech-jellyfin-backup"
-
-show_banner() {
-    clear
-    echo -e "${CYAN}${BOLD}GNTECH Solutions${NC}"
-    echo -e "${YELLOW}Jellyfin Backup Installer${NC}"
-    echo
-}
-
-log_message() {
-    local level=$1
-    local message=$2
-    
-    case $level in
-        "ERROR")   echo -e "${RED}[ERROR]${NC} $message" ;;
-        "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $message" ;;
-        "WARNING") echo -e "${YELLOW}[WARNING]${NC} $message" ;;
-        "INFO")    echo -e "${BLUE}[INFO]${NC} $message" ;;
-    esac
-}
-
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        log_message "ERROR" "This script must be run as root or with sudo"
-        exit 1
-    fi
-}
-
-check_dependencies() {
-    log_message "INFO" "Checking dependencies..."
-    
-    local deps=("docker" "rsync" "bash")
-    local missing_deps=()
-    
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" &> /dev/null; then
-            missing_deps+=("$dep")
-        fi
-    done
-    
-    if [ ${#missing_deps[@]} -gt 0 ]; then
-        log_message "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        log_message "INFO" "Please install the missing dependencies and run the installer again"
-        exit 1
-    fi
-    
-    log_message "SUCCESS" "All dependencies are installed"
-}
-
-create_directories() {
-    log_message "INFO" "Creating directories..."
-    
-    mkdir -p "$CONFIG_DIR"
-    mkdir -p "$LOG_DIR"
-    mkdir -p "$BACKUP_DIR"
-    
-    log_message "SUCCESS" "Directories created successfully"
-}
-
-install_script() {
-    log_message "INFO" "Installing backup script..."
-    
-    if [ ! -f "jellyfin-backup.sh" ]; then
-        log_message "ERROR" "jellyfin-backup.sh not found in current directory"
-        exit 1
-    fi
-    
-    cp jellyfin-backup.sh "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/jellyfin-backup.sh"
-    
-    log_message "SUCCESS" "Backup script installed to $INSTALL_DIR/"
-}
-
-install_config() {
-    log_message "INFO" "Installing configuration file..."
-    
-    if [ -f "jellyfin-backup.conf" ]; then
-        cp jellyfin-backup.conf "$CONFIG_DIR/"
-        log_message "SUCCESS" "Configuration file installed"
-    else
-        log_message "WARNING" "Configuration file not found, using defaults"
-    fi
-}
-
-create_systemd_service() {
-    log_message "INFO" "Creating systemd service..."
-    
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
-[Unit]
-Description=GNTECH Jellyfin Backup Service
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-ExecStart=${INSTALL_DIR}/jellyfin-backup.sh --all
-User=root
-Group=root
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    cat > "/etc/systemd/system/${SERVICE_NAME}.timer" << EOF
-[Unit]
-Description=GNTECH Jellyfin Backup Timer
-Requires=${SERVICE_NAME}.service
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-    systemctl daemon-reload
-    log_message "SUCCESS" "Systemd service created"
-}
-
-setup_cron() {
-    log_message "INFO" "Setting up cron job..."
-    
-    # Create cron job for daily backups at 2 AM
-    echo "0 2 * * * root $INSTALL_DIR/jellyfin-backup.sh --all >> $LOG_DIR/gntech-jellyfin-backup-cron.log 2>&1" > /etc/cron.d/gntech-jellyfin-backup
-    
-    # Create cron job for cleanup of old backups (daily) - 3 day retention
-    echo "0 3 * * * root find $BACKUP_DIR -type d -mtime +3 -exec rm -rf {} + 2>/dev/null" >> /etc/cron.d/gntech-jellyfin-backup
-    
-    log_message "SUCCESS" "Cron jobs configured with 3-day retention policy"
-}
-
-create_logrotate() {
-    log_message "INFO" "Setting up log rotation..."
-    
-    cat > "/etc/logrotate.d/gntech-jellyfin-backup" << EOF
-$LOG_DIR/gntech-jellyfin-backup.log {
-    daily
-    missingok
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-    create 644 root root
-}
-
-$LOG_DIR/gntech-jellyfin-backup-cron.log {
-    weekly
-    missingok
-    rotate 4
-    compress
-    delaycompress
-    notifempty
-    create 644 root root
-}
-EOF
-
-    log_message "SUCCESS" "Log rotation configured"
-}
-
-test_installation() {
-    log_message "INFO" "Testing installation..."
-    
-    if "$INSTALL_DIR/jellyfin-backup.sh" --version &>/dev/null; then
-        log_message "SUCCESS" "Installation test passed"
-    else
-        log_message "WARNING" "Installation test failed, but files are in place"
-    fi
-}
-
-show_completion_message() {
-    echo
-    log_message "SUCCESS" "GNTECH Jellyfin Backup Script installation completed!"
-    echo
-    echo -e "${YELLOW}Installation Summary:${NC}"
-    echo "  • Script installed to: $INSTALL_DIR/jellyfin-backup.sh"
-    echo "  • Configuration: $CONFIG_DIR/jellyfin-backup.conf"
-    echo "  • Log files: $LOG_DIR/gntech-jellyfin-backup.log"
-    echo "  • Backup directory: $BACKUP_DIR"
-    echo
-    echo -e "${YELLOW}Usage:${NC}"
-    echo "  • Run interactive mode: sudo jellyfin-backup.sh"
-    echo "  • Backup all containers: sudo jellyfin-backup.sh --all"
-    echo "  • Enable automated backups: sudo systemctl enable ${SERVICE_NAME}.timer"
-    echo "  • Start automated backups: sudo systemctl start ${SERVICE_NAME}.timer"
-    echo
-    echo -e "${YELLOW}Next Steps:${NC}"
-    echo "  1. Edit $CONFIG_DIR/jellyfin-backup.conf if needed"
-    echo "  2. Test the script: sudo jellyfin-backup.sh"
-    echo "  3. Enable automated backups if desired"
-    echo
-    echo -e "${GREEN}Thank you for choosing GNTECH Solutions!${NC}"
-}
-
-main() {
-    show_banner
-    
-    log_message "INFO" "Starting GNTECH Jellyfin Backup Script installation..."
-    
-    check_root
-    check_dependencies
-    create_directories
-    install_script
-    install_config
-    create_systemd_service
-    setup_cron
-    create_logrotate
-    test_installation
-    show_completion_message
-}
-
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+echo "Thank you for choosing GNTECH Solutions! 🛡️"

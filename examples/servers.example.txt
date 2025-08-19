@@ -1,0 +1,25 @@
+# Jellyfin Guardian - Example Server Configuration
+
+# Copy this file and customize for your environment
+# Usage: Use with deploy.sh or test-deployment.sh
+
+# Example Remote Servers
+# Format: user@hostname:port (port optional, defaults to 22)
+
+# Production Jellyfin Server
+production_user@jellyfin-prod.example.com
+
+# Development Server  
+dev_user@jellyfin-dev.example.com:2222
+
+# Backup Server
+backup_user@backup.example.com
+
+# Multiple Container Server
+admin@multi-container.example.com
+
+# Notes:
+# - Ensure SSH key authentication is set up
+# - User must be in docker group on remote server
+# - Test connection before deployment: ssh user@hostname
+# - For custom SSH ports, specify after colon

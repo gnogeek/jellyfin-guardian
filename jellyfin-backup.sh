@@ -55,7 +55,7 @@ AUTO_REMOVE_UNCOMPRESSED=false
 
 # Remote storage defaults
 REMOTE_STORAGE_ENABLED=false
-REMOTE_CONFIG_FILE="$SCRIPT_DIR/jellyfin-backup-remote.conf"
+REMOTE_CONFIG_FILE="$SCRIPT_DIR/config/jellyfin-backup-remote.conf"
 
 # Load remote storage configuration if exists
 load_remote_config() {
@@ -421,9 +421,137 @@ check_docker() {
     return 0
 }
 
+# Check user permissions for backup operations
+check_permissions() {
+    log_message "INFO" "Checking user permissions for backup operations"
+    
+    local current_user=$(whoami)
+    local user_id=$(id -u)
+    
+    echo "[INFO] Current user: $current_user (UID: $user_id)"
+    
+    # Check if user is root
+    if [ "$user_id" -eq 0 ]; then
+        echo "[SUCCESS] Running as root - all permissions available"
+        log_message "SUCCESS" "Running as root user"
+        return 0
+    fi
+    
+    # Check Docker group membership
+    echo "[INFO] Checking Docker group membership..."
+    if groups "$current_user" | grep -q docker; then
+        echo "[SUCCESS] User is member of docker group"
+        log_message "SUCCESS" "User has docker group membership"
+    else
+        echo "[ERROR] User is not member of docker group"
+        echo "[SOLUTION] Add user to docker group with: sudo usermod -aG docker $current_user"
+        echo "[NOTE] You'll need to log out and back in for group changes to take effect"
+        log_message "ERROR" "User lacks docker group membership"
+        return 1
+    fi
+    
+    # Check Docker socket access
+    echo "[INFO] Testing Docker socket access..."
+    if docker ps >/dev/null 2>&1; then
+        echo "[SUCCESS] Docker socket accessible"
+        log_message "SUCCESS" "Docker socket access verified"
+    else
+        echo "[ERROR] Cannot access Docker socket"
+        echo "[SOLUTION] Ensure Docker daemon is running and user has docker group access"
+        log_message "ERROR" "Docker socket access denied"
+        return 1
+    fi
+    
+    # Check container data directories access
+    echo "[INFO] Checking container data directory access..."
+    local jellyfin_dirs_found=false
+    local accessible_dirs=0
+    local total_dirs=0
+    
+    # Check common Jellyfin container data locations
+    local common_paths=(
+        "/opt"
+        "/var/lib/docker/volumes"
+        "/home/*/jellyfin"
+        "/docker/jellyfin"
+        "/data/jellyfin"
+    )
+    
+    for path_pattern in "${common_paths[@]}"; do
+        for path in $path_pattern; do
+            if [ -d "$path" ]; then
+                total_dirs=$((total_dirs + 1))
+                if [ -r "$path" ]; then
+                    accessible_dirs=$((accessible_dirs + 1))
+                    if find "$path" -maxdepth 2 -name "*jellyfin*" -type d >/dev/null 2>&1; then
+                        jellyfin_dirs_found=true
+                        echo "[SUCCESS] Found readable Jellyfin directory: $path"
+                        log_message "SUCCESS" "Accessible Jellyfin directory found: $path"
+                    fi
+                else
+                    echo "[WARNING] Directory exists but not readable: $path"
+                    log_message "WARNING" "Directory not readable: $path"
+                fi
+            fi
+        done
+    done
+    
+    # Check /opt specifically (common location)
+    if [ -d "/opt" ]; then
+        if [ -r "/opt" ]; then
+            echo "[SUCCESS] /opt directory is readable"
+            log_message "SUCCESS" "/opt directory accessible"
+        else
+            echo "[ERROR] /opt directory is not readable"
+            echo "[SOLUTION] May need: sudo chmod +r /opt or sudo chown -R $current_user:$current_user /opt"
+            log_message "ERROR" "/opt directory not accessible"
+        fi
+    fi
+    
+    # Summary
+    echo
+    echo "[INFO] Permission Check Summary:"
+    echo "  - User: $current_user (UID: $user_id)"
+    echo "  - Docker access: $(docker info >/dev/null 2>&1 && echo 'OK' || echo 'FAILED')"
+    echo "  - Accessible directories: $accessible_dirs/$total_dirs"
+    echo "  - Jellyfin directories found: $jellyfin_dirs_found"
+    
+    if [ "$jellyfin_dirs_found" = true ]; then
+        echo "[SUCCESS] User has sufficient permissions for backup operations"
+        log_message "SUCCESS" "Permission checks passed"
+        return 0
+    else
+        echo "[WARNING] No accessible Jellyfin directories found"
+        echo "[INFO] You may need to adjust file permissions or run as root for some containers"
+        echo
+        echo "Common solutions:"
+        echo "1. Add user to docker group: sudo usermod -aG docker $current_user"
+        echo "2. Fix directory permissions: sudo chmod -R +r /opt"
+        echo "3. Change directory ownership: sudo chown -R $current_user:$current_user /opt"
+        echo "4. Run script as root: sudo ./jellyfin-backup.sh"
+        
+        log_message "WARNING" "Limited permissions - manual intervention may be needed"
+        
+        echo
+        echo -n "Continue anyway? Some containers may not be accessible (y/N): "
+        read -r continue_choice
+        if [[ "$continue_choice" =~ ^[Yy] ]]; then
+            return 0
+        else
+            return 1
+        fi
+    fi
+}
+
 # Health checks
 perform_health_checks() {
     log_message "INFO" "Performing pre-backup health checks"
+    
+    # Check user permissions
+    if ! check_permissions; then
+        log_message "ERROR" "Permission checks failed"
+        return 1
+    fi
     
     # Check disk space
     local available_space=$(df -BG "$BACKUP_BASE_DIR" | tail -1 | awk '{print $4}' | sed 's/G//')
@@ -1247,14 +1375,15 @@ show_menu() {
     echo -e " ${BLUE}7.${NC} Configure remote storage"
     echo -e " ${BLUE}8.${NC} Test remote storage connection"
     echo -e " ${BLUE}9.${NC} View backup history"
-    echo -e " ${BLUE}10.${NC} Exit"
+    echo -e " ${BLUE}10.${NC} Clean up all backups"
+    echo -e " ${BLUE}11.${NC} Exit"
     echo
 }
 
 # Get menu choice
 get_menu_choice() {
     local choice
-    echo -n -e "${WHITE}Enter your choice (1-8): ${NC}" >&2
+    echo -n -e "${WHITE}Enter your choice (1-11): ${NC}" >&2
     read choice
     echo "$choice"
 }
@@ -1312,6 +1441,138 @@ view_backup_history() {
     fi
 }
 
+# Clean up all previous backups
+cleanup_all_backups() {
+    echo -e "${CYAN}Backup Cleanup Utility${NC}"
+    echo
+    
+    if [ ! -d "$BACKUP_BASE_DIR" ]; then
+        echo "[INFO] No backup directory found at $BACKUP_BASE_DIR"
+        return 0
+    fi
+    
+    echo "[INFO] Scanning for backups in: $BACKUP_BASE_DIR"
+    
+    local backup_count=0
+    local total_size=0
+    
+    # Count and size backups
+    while IFS= read -r -d '' backup_dir; do
+        if [ -d "$backup_dir" ]; then
+            backup_count=$((backup_count + 1))
+            local size=$(du -sm "$backup_dir" 2>/dev/null | cut -f1)
+            total_size=$((total_size + size))
+        fi
+    done < <(find "$BACKUP_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+    
+    # Count individual backup files
+    local file_count=0
+    while IFS= read -r -d '' backup_file; do
+        file_count=$((file_count + 1))
+        local size=$(du -sm "$backup_file" 2>/dev/null | cut -f1)
+        total_size=$((total_size + size))
+    done < <(find "$BACKUP_BASE_DIR" -name "*.tar.gz" -type f -print0 2>/dev/null)
+    
+    if [ $backup_count -eq 0 ] && [ $file_count -eq 0 ]; then
+        echo "[INFO] No backups found to clean up"
+        return 0
+    fi
+    
+    echo "[INFO] Found backups:"
+    echo "  - Backup directories: $backup_count"
+    echo "  - Backup files: $file_count"
+    echo "  - Total size: ${total_size}MB"
+    echo
+    
+    # Show recent backups
+    echo "[INFO] Recent backup directories:"
+    find "$BACKUP_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | \
+        sort -nr | head -5 | while read -r timestamp path; do
+        local date=$(date -d "@$timestamp" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "Unknown")
+        local size=$(du -sh "$path" 2>/dev/null | cut -f1)
+        echo "  $(basename "$path") - $date - $size"
+    done
+    
+    echo
+    echo "[INFO] Recent backup files:"
+    find "$BACKUP_BASE_DIR" -name "*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | \
+        sort -nr | head -5 | while read -r timestamp path; do
+        local date=$(date -d "@$timestamp" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "Unknown")
+        local size=$(du -sh "$path" 2>/dev/null | cut -f1)
+        echo "  $(basename "$path") - $date - $size"
+    done
+    
+    echo
+    echo -e "${YELLOW}⚠️  WARNING: This will delete ALL existing backups!${NC}"
+    echo "This action cannot be undone. Make sure you have copies elsewhere if needed."
+    echo
+    echo -n "Are you sure you want to delete all backups? Type 'DELETE ALL' to confirm: "
+    read -r confirmation
+    
+    if [ "$confirmation" = "DELETE ALL" ]; then
+        echo
+        echo "[INFO] Deleting all backups..."
+        log_message "WARNING" "User initiated full backup cleanup"
+        
+        local deleted_dirs=0
+        local deleted_files=0
+        local errors=0
+        
+        # Delete backup directories
+        while IFS= read -r -d '' backup_dir; do
+            if [ -d "$backup_dir" ]; then
+                echo "[INFO] Deleting directory: $(basename "$backup_dir")"
+                if rm -rf "$backup_dir" 2>/dev/null; then
+                    deleted_dirs=$((deleted_dirs + 1))
+                    log_message "INFO" "Deleted backup directory: $backup_dir"
+                else
+                    echo "[ERROR] Failed to delete: $(basename "$backup_dir")"
+                    errors=$((errors + 1))
+                    log_message "ERROR" "Failed to delete backup directory: $backup_dir"
+                fi
+            fi
+        done < <(find "$BACKUP_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+        
+        # Delete backup files
+        while IFS= read -r -d '' backup_file; do
+            echo "[INFO] Deleting file: $(basename "$backup_file")"
+            if rm -f "$backup_file" 2>/dev/null; then
+                deleted_files=$((deleted_files + 1))
+                log_message "INFO" "Deleted backup file: $backup_file"
+                # Also delete corresponding log file
+                local log_file="${backup_file%.tar.gz}.log"
+                if [ -f "$log_file" ]; then
+                    rm -f "$log_file" 2>/dev/null
+                    log_message "INFO" "Deleted backup log: $log_file"
+                fi
+            else
+                echo "[ERROR] Failed to delete: $(basename "$backup_file")"
+                errors=$((errors + 1))
+                log_message "ERROR" "Failed to delete backup file: $backup_file"
+            fi
+        done < <(find "$BACKUP_BASE_DIR" -name "*.tar.gz" -type f -print0 2>/dev/null)
+        
+        echo
+        echo "[SUCCESS] Cleanup completed:"
+        echo "  - Deleted directories: $deleted_dirs"
+        echo "  - Deleted files: $deleted_files"
+        echo "  - Errors: $errors"
+        echo "  - Freed space: ${total_size}MB"
+        
+        if [ $errors -eq 0 ]; then
+            echo -e "${GREEN}✓ All backups cleaned successfully${NC}"
+            log_message "SUCCESS" "Full backup cleanup completed successfully"
+        else
+            echo -e "${YELLOW}⚠ Cleanup completed with some errors${NC}"
+            log_message "WARNING" "Backup cleanup completed with $errors errors"
+        fi
+        
+    else
+        echo "[INFO] Cleanup cancelled"
+        log_message "INFO" "Backup cleanup cancelled by user"
+    fi
+}
+
 # Parse command line arguments
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
@@ -1350,8 +1611,8 @@ parse_arguments() {
                 shift
                 ;;
             --configure-remote)
-                if [ -f "$SCRIPT_DIR/configure-remote.sh" ]; then
-                    "$SCRIPT_DIR/configure-remote.sh"
+                if [ -f "$SCRIPT_DIR/scripts/configure-remote.sh" ]; then
+                    "$SCRIPT_DIR/scripts/configure-remote.sh"
                     exit 0
                 else
                     echo "[ERROR] Remote configuration script not found"
@@ -1369,6 +1630,10 @@ parse_arguments() {
                 ;;
             --local-only)
                 DELETE_LOCAL_AFTER_UPLOAD=false
+                shift
+                ;;
+            --cleanup)
+                BACKUP_MODE="cleanup"
                 shift
                 ;;
             -h|--help)
@@ -1406,6 +1671,7 @@ show_help() {
     echo "  --test-remote             Test remote storage connection"
     echo "  --no-remote               Disable remote storage for this run"
     echo "  --local-only              Keep local backups (don't delete after upload)"
+    echo "  --cleanup                 Clean up all existing backups"
     echo "  -v, --version             Show version information"
     echo "  -h, --help                Show this help message"
     echo "  --dry-run                 Show what would be backed up without doing it"
@@ -1602,6 +1868,10 @@ main() {
             fi
             exit 1
             ;;
+        "cleanup")
+            cleanup_all_backups
+            exit $?
+            ;;
     esac
     
     # Main interactive loop
@@ -1660,8 +1930,8 @@ main() {
                 ;;
             7)
                 echo -e "${YELLOW}Configuring remote storage...${NC}"
-                if [ -f "$SCRIPT_DIR/configure-remote.sh" ]; then
-                    "$SCRIPT_DIR/configure-remote.sh"
+                if [ -f "$SCRIPT_DIR/scripts/configure-remote.sh" ]; then
+                    "$SCRIPT_DIR/scripts/configure-remote.sh"
                 else
                     echo -e "${RED}Remote configuration script not found${NC}"
                 fi
@@ -1678,6 +1948,10 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             10)
+                cleanup_all_backups
+                read -p "Press Enter to continue..."
+                ;;
+            11)
                 log_message "INFO" "Backup script terminated by user"
                 echo -e "${GREEN}Thank you for using GNTECH Solutions Backup Script!${NC}"
                 exit 0
