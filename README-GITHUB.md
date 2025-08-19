@@ -1,6 +1,6 @@
 # GNTECH Jellyfin Guardian
 
-[![Version](https://img.shields.io/badge/version-2.2-blue.svg)](https://github.com/gntech/jellyfin-guardian)
+[![Version](https://img.shields.io/badge/version-2.1-blue.svg)](https://github.com/gntech/jellyfin-guardian)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-orange.svg)](https://www.gnu.org/software/bash/)
 [![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)](https://www.linux.org/)
@@ -18,9 +18,7 @@ Jellyfin Guardian is not just another backup script. It's a comprehensive data p
 - **🛡️ Zero-Downtime Safety** - <10 second container stops with graceful restart
 - **📊 Real-time Progress** - Live progress bars with ETA and transfer rates
 - **🤖 Auto-dependency Management** - Installs prerequisites automatically
-- **📝 Comprehensive Logging** - Session logs + backup-specific log files
-- **☁️ Multi-Provider Remote Storage** - SFTP, S3, NFS, FTP, rclone support
-- **🗄️ Intelligent Retention** - Local (1) + Remote (3) backup policies
+- **📝 Comprehensive Logging** - Detailed backup reports and audit trails
 
 ## 🚀 Quick Start
 
@@ -137,63 +135,6 @@ jellyfin-guardian/
 
 # Batch deployment (edit servers.txt first)
 ./deploy.sh --batch
-```
-
-## ☁️ Remote Storage
-
-### Supported Providers
-- **SFTP/SSH**: Secure, reliable (recommended)
-- **S3-Compatible**: AWS S3, MinIO, DigitalOcean Spaces
-- **Network File System**: NFS mounts
-- **FTP/FTPS**: Traditional file transfer
-- **Cloud Storage**: Google Drive, Dropbox via rclone
-
-### Quick Setup
-```bash
-# Interactive configuration wizard
-./jellyfin-backup.sh --configure-remote
-
-# Test your configuration
-./jellyfin-backup.sh --test-remote
-
-# Run backup with remote storage
-./jellyfin-backup.sh -c container_name
-```
-
-### Retention Strategy
-- **Local**: Keep only latest backup (saves disk space)
-- **Remote**: Keep last 3 backups (redundancy & history)  
-- **Automatic**: Old backups cleaned up automatically
-
-### Example: SFTP Configuration
-```bash
-# Configuration prompts:
-SFTP server: backup.example.com
-Username: backup_user
-Remote path: /home/backups/jellyfin
-SSH key: ~/.ssh/backup_key
-
-# Results in:
-Local:  ~/jellyfin-backups/latest_backup.tar.gz
-Remote: backup.example.com:/home/backups/jellyfin/
-        ├── container_20250819_120000.tar.gz
-        ├── container_20250818_120000.tar.gz
-        └── container_20250817_120000.tar.gz
-```
-
-### Remote Storage Options
-```bash
-# Configure during first run (interactive)
-./jellyfin-backup.sh --configure-remote
-
-# Disable remote storage for one backup
-./jellyfin-backup.sh -c vfx --no-remote
-
-# Keep local backup (don't delete after upload)
-./jellyfin-backup.sh -c vfx --local-only
-
-# Test connection without backup
-./jellyfin-backup.sh --test-remote
 ```
 
 ## 📝 Log Files

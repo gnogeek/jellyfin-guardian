@@ -2,7 +2,7 @@
 
 # GNTECH Solutions - Jellyfin Container Backup Script (Final Version)
 # Interactive backup script for Jellyfin containers on remote servers
-# Version: 2.1 (Production Ready with Log Enhancement)
+# Version: 2.2 (Remote Storage Release)
 # 
 # Features:
 # - Pre-backup database integrity verification
@@ -12,6 +12,9 @@
 # - Automatic prerequisite installation
 # - Interactive container selection
 # - Comprehensive backup-specific log files
+# - Remote storage with multiple providers (SFTP, S3, NFS, FTP, rclone)
+# - Intelligent retention policies (local + remote)
+# - Automatic cleanup and space management
 # 
 # Copyright (c) 2024 GNTECH Solutions
 # Licensed under MIT License
@@ -20,7 +23,7 @@ set -euo pipefail
 
 # Script metadata
 SCRIPT_NAME="GNTECH Jellyfin Backup"
-SCRIPT_VERSION="2.1"
+SCRIPT_VERSION="2.2"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors for output (simplified)
@@ -49,6 +52,22 @@ BACKUP_RETENTION_DAYS=3
 ENABLE_COMPRESSION=true
 COMPRESSION_LEVEL=6
 AUTO_REMOVE_UNCOMPRESSED=false
+
+# Remote storage defaults
+REMOTE_STORAGE_ENABLED=false
+REMOTE_CONFIG_FILE="$SCRIPT_DIR/jellyfin-backup-remote.conf"
+
+# Load remote storage configuration if exists
+load_remote_config() {
+    if [ -f "$REMOTE_CONFIG_FILE" ]; then
+        log_message "INFO" "Loading remote storage configuration"
+        source "$REMOTE_CONFIG_FILE"
+        
+        if [ "$REMOTE_STORAGE_ENABLED" = "true" ]; then
+            log_message "INFO" "Remote storage enabled: $REMOTE_STORAGE_TYPE"
+        fi
+    fi
+}
 
 # Ensure directories exist
 ensure_directories() {
@@ -583,6 +602,341 @@ select_container() {
     fi
 }
 
+# === REMOTE STORAGE FUNCTIONS ===
+
+# Upload backup to remote storage
+upload_to_remote() {
+    local backup_file=$1
+    local container_name=$2
+    
+    if [ "$REMOTE_STORAGE_ENABLED" != "true" ]; then
+        return 0
+    fi
+    
+    log_message "INFO" "Starting remote upload for: $backup_file"
+    echo
+    echo "========================================"
+    echo "Uploading to Remote Storage"
+    echo "========================================"
+    echo "[INFO] Storage type: $REMOTE_STORAGE_TYPE"
+    echo "[INFO] File: $(basename "$backup_file")"
+    
+    case $REMOTE_STORAGE_TYPE in
+        sftp)
+            upload_sftp "$backup_file" "$container_name"
+            ;;
+        s3)
+            upload_s3 "$backup_file" "$container_name"
+            ;;
+        nfs)
+            upload_nfs "$backup_file" "$container_name"
+            ;;
+        ftp)
+            upload_ftp "$backup_file" "$container_name"
+            ;;
+        rclone)
+            upload_rclone "$backup_file" "$container_name"
+            ;;
+        *)
+            echo "[ERROR] Unknown storage type: $REMOTE_STORAGE_TYPE"
+            return 1
+            ;;
+    esac
+    
+    local upload_result=$?
+    
+    if [ $upload_result -eq 0 ]; then
+        echo "[SUCCESS] Remote upload completed"
+        log_message "SUCCESS" "Remote upload successful: $backup_file"
+        
+        # Verify upload if enabled
+        if [ "$VERIFY_REMOTE_UPLOAD" = "true" ]; then
+            verify_remote_backup "$backup_file" "$container_name"
+        fi
+        
+        # Clean up old remote backups
+        cleanup_remote_backups "$container_name"
+        
+        # Delete local backup if configured
+        if [ "$DELETE_LOCAL_AFTER_UPLOAD" = "true" ]; then
+            echo "[INFO] Deleting local backup after successful upload..."
+            rm -f "$backup_file"
+            log_message "INFO" "Local backup deleted: $backup_file"
+        fi
+        
+        return 0
+    else
+        echo "[ERROR] Remote upload failed"
+        log_message "ERROR" "Remote upload failed: $backup_file"
+        return 1
+    fi
+}
+
+# SFTP upload function
+upload_sftp() {
+    local backup_file=$1
+    local container_name=$2
+    local remote_file="$SFTP_PATH/$(basename "$backup_file")"
+    
+    echo "[INFO] Uploading via SFTP to $SFTP_HOST:$remote_file"
+    
+    # Ensure remote directory exists
+    ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "mkdir -p $SFTP_PATH" 2>/dev/null
+    
+    # Upload with progress
+    if command -v pv >/dev/null 2>&1; then
+        pv "$backup_file" | ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "cat > $remote_file"
+    else
+        scp -i "$SFTP_KEY_FILE" -P "$SFTP_PORT" "$backup_file" "$SFTP_USER@$SFTP_HOST:$remote_file"
+    fi
+}
+
+# S3 upload function
+upload_s3() {
+    local backup_file=$1
+    local container_name=$2
+    local s3_key="$S3_PATH/$(basename "$backup_file")"
+    
+    echo "[INFO] Uploading to S3: s3://$S3_BUCKET/$s3_key"
+    
+    # Check if aws cli is available
+    if ! command -v aws >/dev/null 2>&1; then
+        echo "[ERROR] AWS CLI not installed. Install with: sudo apt install awscli"
+        return 1
+    fi
+    
+    # Set AWS credentials if provided
+    if [ -n "$S3_ACCESS_KEY" ] && [ -n "$S3_SECRET_KEY" ]; then
+        export AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY"
+        export AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY"
+        export AWS_DEFAULT_REGION="$S3_REGION"
+    fi
+    
+    # Set endpoint if not AWS
+    local endpoint_option=""
+    if [ -n "$S3_ENDPOINT" ]; then
+        endpoint_option="--endpoint-url $S3_ENDPOINT"
+    fi
+    
+    # Upload with progress
+    aws s3 cp "$backup_file" "s3://$S3_BUCKET/$s3_key" $endpoint_option --region "$S3_REGION"
+}
+
+# NFS upload function
+upload_nfs() {
+    local backup_file=$1
+    local container_name=$2
+    local mount_point="$NFS_MOUNT_POINT"
+    
+    echo "[INFO] Copying to NFS mount: $mount_point"
+    
+    # Check if already mounted
+    if ! mountpoint -q "$mount_point"; then
+        echo "[INFO] Mounting NFS share..."
+        sudo mkdir -p "$mount_point"
+        sudo mount -t nfs -o "$NFS_OPTIONS" "$NFS_HOST:$NFS_PATH" "$mount_point"
+        
+        if [ $? -ne 0 ]; then
+            echo "[ERROR] Failed to mount NFS share"
+            return 1
+        fi
+    fi
+    
+    # Copy with progress
+    local dest_dir="$mount_point/jellyfin-backups"
+    sudo mkdir -p "$dest_dir"
+    
+    if command -v pv >/dev/null 2>&1; then
+        pv "$backup_file" | sudo tee "$dest_dir/$(basename "$backup_file")" >/dev/null
+    else
+        sudo cp "$backup_file" "$dest_dir/"
+    fi
+}
+
+# FTP upload function
+upload_ftp() {
+    local backup_file=$1
+    local container_name=$2
+    
+    echo "[INFO] Uploading via FTP to $FTP_HOST:$FTP_PATH"
+    
+    # Check if lftp is available
+    if ! command -v lftp >/dev/null 2>&1; then
+        echo "[ERROR] lftp not installed. Install with: sudo apt install lftp"
+        return 1
+    fi
+    
+    # Upload using lftp
+    lftp -c "
+    set ftp:passive-mode $FTP_PASSIVE
+    connect ftp://$FTP_USER:$FTP_PASS@$FTP_HOST:$FTP_PORT
+    mkdir -p $FTP_PATH
+    cd $FTP_PATH
+    put $backup_file
+    bye
+    "
+}
+
+# Rclone upload function
+upload_rclone() {
+    local backup_file=$1
+    local container_name=$2
+    local remote_path="$RCLONE_REMOTE$RCLONE_PATH/$(basename "$backup_file")"
+    
+    echo "[INFO] Uploading via rclone to: $remote_path"
+    
+    # Check if rclone is available
+    if ! command -v rclone >/dev/null 2>&1; then
+        echo "[ERROR] rclone not installed. Install with: sudo apt install rclone"
+        return 1
+    fi
+    
+    # Upload with progress
+    rclone copy "$backup_file" "$RCLONE_REMOTE$RCLONE_PATH" --progress --stats 5s
+}
+
+# Verify remote backup
+verify_remote_backup() {
+    local backup_file=$1
+    local container_name=$2
+    
+    echo "[INFO] Verifying remote backup integrity..."
+    
+    local local_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
+    local remote_size=""
+    
+    case $REMOTE_STORAGE_TYPE in
+        sftp)
+            remote_size=$(ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" \
+                "stat -c%s $SFTP_PATH/$(basename "$backup_file")" 2>/dev/null || echo "0")
+            ;;
+        s3)
+            remote_size=$(aws s3api head-object --bucket "$S3_BUCKET" --key "$S3_PATH/$(basename "$backup_file")" \
+                --query 'ContentLength' --output text 2>/dev/null || echo "0")
+            ;;
+        # Add other verification methods as needed
+    esac
+    
+    if [ "$local_size" = "$remote_size" ] && [ "$local_size" != "0" ]; then
+        echo "[SUCCESS] Remote backup verification passed"
+        log_message "SUCCESS" "Remote backup verified: $backup_file"
+        return 0
+    else
+        echo "[WARNING] Remote backup verification failed (size mismatch)"
+        log_message "WARNING" "Remote backup verification failed: $backup_file"
+        return 1
+    fi
+}
+
+# Clean up old remote backups
+cleanup_remote_backups() {
+    local container_name=$1
+    
+    if [ "$REMOTE_RETENTION" -le 0 ]; then
+        return 0
+    fi
+    
+    echo "[INFO] Cleaning up old remote backups (keeping last $REMOTE_RETENTION)"
+    log_message "INFO" "Starting remote backup cleanup for: $container_name"
+    
+    case $REMOTE_STORAGE_TYPE in
+        sftp)
+            ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" \
+                "cd $SFTP_PATH && ls -t ${container_name}_*.tar.gz | tail -n +$((REMOTE_RETENTION + 1)) | xargs -r rm -f"
+            ;;
+        s3)
+            # List and delete old S3 objects
+            aws s3api list-objects-v2 --bucket "$S3_BUCKET" --prefix "$S3_PATH/${container_name}_" \
+                --query 'sort_by(Contents, &LastModified)[:-'$REMOTE_RETENTION'].Key' --output text | \
+                xargs -r -I {} aws s3 rm "s3://$S3_BUCKET/{}"
+            ;;
+        # Add other cleanup methods as needed
+    esac
+    
+    log_message "INFO" "Remote backup cleanup completed"
+}
+
+# Test remote storage connection
+test_remote_storage() {
+    if [ "$REMOTE_STORAGE_ENABLED" != "true" ]; then
+        echo "[INFO] Remote storage is disabled"
+        return 0
+    fi
+    
+    echo "========================================"
+    echo "Testing Remote Storage Connection"
+    echo "========================================"
+    echo "[INFO] Storage type: $REMOTE_STORAGE_TYPE"
+    
+    case $REMOTE_STORAGE_TYPE in
+        sftp)
+            echo "[INFO] Testing SFTP connection to $SFTP_HOST..."
+            if ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 "$SFTP_USER@$SFTP_HOST" "echo 'Connection test successful'" 2>/dev/null; then
+                echo "[SUCCESS] SFTP connection test passed"
+                return 0
+            else
+                echo "[ERROR] SFTP connection test failed"
+                return 1
+            fi
+            ;;
+        s3)
+            echo "[INFO] Testing S3 connection..."
+            if aws s3 ls "s3://$S3_BUCKET" >/dev/null 2>&1; then
+                echo "[SUCCESS] S3 connection test passed"
+                return 0
+            else
+                echo "[ERROR] S3 connection test failed"
+                return 1
+            fi
+            ;;
+        rclone)
+            echo "[INFO] Testing rclone connection..."
+            if rclone lsd "$RCLONE_REMOTE" >/dev/null 2>&1; then
+                echo "[SUCCESS] Rclone connection test passed"
+                return 0
+            else
+                echo "[ERROR] Rclone connection test failed"
+                return 1
+            fi
+            ;;
+        *)
+            echo "[WARNING] Connection test not implemented for: $REMOTE_STORAGE_TYPE"
+            return 0
+            ;;
+    esac
+}
+
+# Clean up local backups based on retention policy
+cleanup_local_backups() {
+    local container_name=$1
+    
+    if [ "$LOCAL_RETENTION" -le 0 ]; then
+        return 0
+    fi
+    
+    echo "[INFO] Cleaning up old local backups (keeping last $LOCAL_RETENTION)"
+    log_message "INFO" "Starting local backup cleanup for: $container_name"
+    
+    local backup_pattern="$BACKUP_BASE_DIR/*/${container_name}_*.tar.gz"
+    local backups_to_delete=$(find $BACKUP_BASE_DIR -name "${container_name}_*.tar.gz" -type f -printf '%T@ %p\n' | \
+                             sort -nr | tail -n +$((LOCAL_RETENTION + 1)) | cut -d' ' -f2-)
+    
+    if [ -n "$backups_to_delete" ]; then
+        echo "$backups_to_delete" | while read -r backup_file; do
+            echo "[INFO] Removing old backup: $(basename "$backup_file")"
+            rm -f "$backup_file"
+            # Also remove corresponding log file
+            local log_file="${backup_file%.tar.gz}.log"
+            if [ -f "$log_file" ]; then
+                rm -f "$log_file"
+            fi
+        done
+        log_message "INFO" "Local backup cleanup completed"
+    else
+        echo "[INFO] No old backups to clean up"
+    fi
+}
+
 # Get container mounts
 get_container_mounts() {
     local container_name=$1
@@ -853,6 +1207,20 @@ backup_container_data() {
         fi
     fi
 
+    # Upload to remote storage if enabled
+    if [ "$REMOTE_STORAGE_ENABLED" = "true" ] && [ "$AUTO_UPLOAD" = "true" ]; then
+        if upload_to_remote "$backup_file" "$container_name"; then
+            echo "[SUCCESS] Remote upload completed successfully"
+        else
+            echo "[WARNING] Remote upload failed, backup remains local"
+        fi
+    fi
+
+    # Clean up local backups based on retention policy
+    if [ "$LOCAL_RETENTION" -gt 0 ]; then
+        cleanup_local_backups "$container_name"
+    fi
+
     # Log successful completion
     log_message "SUCCESS" "Backup process completed successfully for container: $container_name"
     log_message "INFO" "Final backup location: $backup_file"
@@ -860,6 +1228,9 @@ backup_container_data() {
     echo
     echo "[SUCCESS] Backup process completed for $container_name"
     echo "Backup location: $backup_file"
+    if [ "$REMOTE_STORAGE_ENABLED" = "true" ]; then
+        echo "Remote storage: $REMOTE_STORAGE_TYPE"
+    fi
     return 0
 }
 
@@ -873,8 +1244,10 @@ show_menu() {
     echo -e " ${BLUE}4.${NC} Backup all Jellyfin containers"
     echo -e " ${BLUE}5.${NC} View container mounts"
     echo -e " ${BLUE}6.${NC} Configure backup settings"
-    echo -e " ${BLUE}7.${NC} View backup history"
-    echo -e " ${BLUE}8.${NC} Exit"
+    echo -e " ${BLUE}7.${NC} Configure remote storage"
+    echo -e " ${BLUE}8.${NC} Test remote storage connection"
+    echo -e " ${BLUE}9.${NC} View backup history"
+    echo -e " ${BLUE}10.${NC} Exit"
     echo
 }
 
@@ -976,6 +1349,28 @@ parse_arguments() {
                 DRY_RUN=true
                 shift
                 ;;
+            --configure-remote)
+                if [ -f "$SCRIPT_DIR/configure-remote.sh" ]; then
+                    "$SCRIPT_DIR/configure-remote.sh"
+                    exit 0
+                else
+                    echo "[ERROR] Remote configuration script not found"
+                    exit 1
+                fi
+                ;;
+            --test-remote)
+                load_remote_config
+                test_remote_storage
+                exit $?
+                ;;
+            --no-remote)
+                REMOTE_STORAGE_ENABLED=false
+                shift
+                ;;
+            --local-only)
+                DELETE_LOCAL_AFTER_UPLOAD=false
+                shift
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -1007,6 +1402,10 @@ show_help() {
     echo "  -d, --backup-dir DIR      Override backup directory"
     echo "  --no-compress             Skip compression of backup"
     echo "  --no-verify               Skip database integrity verification"
+    echo "  --configure-remote        Run interactive remote storage setup"
+    echo "  --test-remote             Test remote storage connection"
+    echo "  --no-remote               Disable remote storage for this run"
+    echo "  --local-only              Keep local backups (don't delete after upload)"
     echo "  -v, --version             Show version information"
     echo "  -h, --help                Show this help message"
     echo "  --dry-run                 Show what would be backed up without doing it"
@@ -1106,6 +1505,9 @@ main() {
     # Ensure all required directories exist
     ensure_directories
     
+    # Load remote storage configuration
+    load_remote_config
+
     # Install prerequisites if missing
     install_prerequisites
     
@@ -1257,10 +1659,25 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             7)
-                view_backup_history
+                echo -e "${YELLOW}Configuring remote storage...${NC}"
+                if [ -f "$SCRIPT_DIR/configure-remote.sh" ]; then
+                    "$SCRIPT_DIR/configure-remote.sh"
+                else
+                    echo -e "${RED}Remote configuration script not found${NC}"
+                fi
                 read -p "Press Enter to continue..."
                 ;;
             8)
+                echo -e "${YELLOW}Testing remote storage connection...${NC}"
+                load_remote_config
+                test_remote_storage
+                read -p "Press Enter to continue..."
+                ;;
+            9)
+                view_backup_history
+                read -p "Press Enter to continue..."
+                ;;
+            10)
                 log_message "INFO" "Backup script terminated by user"
                 echo -e "${GREEN}Thank you for using GNTECH Solutions Backup Script!${NC}"
                 exit 0
