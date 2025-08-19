@@ -1,12 +1,107 @@
 #!/bin/bash
 
-#############################################################################
-#                         GNTECH Solutions                                 #
-#                      Installation Script                                 #
-#                                                                           #
-#  Description: Install and configure Jellyfin backup script              #
-#  Author: GNTECH Solutions                                                 #
-#############################################################################
+# GNTECH Jellyfin Guardian - Local Installation Script
+# Version: 2.1 (Log Enhancement Release)
+
+set -euo pipefail
+
+SCRIPT_VERSION="2.1"
+INSTALL_DIR="/usr/local/bin"
+CONFIG_DIR="$HOME/.config/gntech"
+LOG_DIR="$HOME/.local/log"
+
+echo "========================================"
+echo "🛡️  GNTECH Jellyfin Guardian"
+echo "Local Installation Script v$SCRIPT_VERSION"
+echo "========================================"
+echo
+
+# Check if running as root for system installation
+if [[ $EUID -eq 0 ]]; then
+    echo "[INFO] Installing system-wide (running as root)"
+    INSTALL_TYPE="system"
+else
+    echo "[INFO] Installing for current user"
+    INSTALL_DIR="$HOME/.local/bin"
+    INSTALL_TYPE="user"
+fi
+
+# Create necessary directories
+echo "[INFO] Creating directories..."
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR"
+
+# Check if script exists
+if [ ! -f "jellyfin-backup.sh" ]; then
+    echo "[ERROR] jellyfin-backup.sh not found in current directory"
+    echo "[INFO] Please run this script from the jellyfin-guardian directory"
+    exit 1
+fi
+
+# Install main script
+echo "[INFO] Installing jellyfin-backup.sh to $INSTALL_DIR..."
+cp jellyfin-backup.sh "$INSTALL_DIR/jellyfin-guardian"
+chmod +x "$INSTALL_DIR/jellyfin-guardian"
+
+# Install configuration file
+if [ -f "jellyfin-backup.conf" ]; then
+    echo "[INFO] Installing configuration template..."
+    cp jellyfin-backup.conf "$CONFIG_DIR/"
+fi
+
+# Install deployment script
+if [ -f "deploy.sh" ]; then
+    echo "[INFO] Installing deployment script..."
+    cp deploy.sh "$INSTALL_DIR/jellyfin-guardian-deploy"
+    chmod +x "$INSTALL_DIR/jellyfin-guardian-deploy"
+fi
+
+# Add to PATH for user installation
+if [ "$INSTALL_TYPE" = "user" ]; then
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        echo "[INFO] Adding $HOME/.local/bin to PATH..."
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+        echo "[INFO] Please run: source ~/.bashrc or start a new terminal session"
+    fi
+fi
+
+# Test installation
+echo
+echo "[INFO] Testing installation..."
+if "$INSTALL_DIR/jellyfin-guardian" --version >/dev/null 2>&1; then
+    echo "[SUCCESS] Installation completed successfully!"
+else
+    echo "[ERROR] Installation test failed"
+    exit 1
+fi
+
+echo
+echo "========================================"
+echo "🎉 Installation Complete!"
+echo "========================================"
+echo
+echo "Installed components:"
+echo "  • Main script: $INSTALL_DIR/jellyfin-guardian"
+echo "  • Deploy script: $INSTALL_DIR/jellyfin-guardian-deploy"
+echo "  • Config template: $CONFIG_DIR/jellyfin-backup.conf"
+echo "  • Log directory: $LOG_DIR"
+echo
+echo "Usage:"
+if [ "$INSTALL_TYPE" = "system" ]; then
+    echo "  jellyfin-guardian --help"
+    echo "  jellyfin-guardian-deploy"
+else
+    echo "  ~/.local/bin/jellyfin-guardian --help"
+    echo "  jellyfin-guardian --help    (after reloading PATH)"
+fi
+echo
+echo "Quick start:"
+echo "  jellyfin-guardian              # Interactive mode"
+echo "  jellyfin-guardian --all        # Backup all containers"
+echo "  jellyfin-guardian --list       # List containers"
+echo
+echo "For remote deployment:"
+echo "  jellyfin-guardian-deploy       # Deploy to remote server"
+echo
 
 # Colors
 RED='\033[0;31m'
