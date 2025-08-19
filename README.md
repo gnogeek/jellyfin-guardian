@@ -40,7 +40,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/jellyfin-guardian.git
+git clone https://github.com/gnogeek/jellyfin-guardian.git
 cd jellyfin-guardian
 
 # Install for current user (recommended)
@@ -254,7 +254,7 @@ We welcome contributions! Please see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 
 ### 🏗️ **Development Setup**
 ```bash
-git clone https://github.com/yourusername/jellyfin-guardian.git
+git clone https://github.com/gnogeek/jellyfin-guardian.git
 cd jellyfin-guardian
 # Make changes and test
 ./jellyfin-backup.sh --dry-run --list
@@ -267,8 +267,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🎯 Support
 
 - **📖 Documentation**: [docs/](docs/)
-- **🐛 Issues**: [GitHub Issues](https://github.com/yourusername/jellyfin-guardian/issues)
-- **💬 Discussions**: [GitHub Discussions](https://github.com/yourusername/jellyfin-guardian/discussions)
+- **🐛 Issues**: [GitHub Issues](https://github.com/gnogeek/jellyfin-guardian/issues)
+- **💬 Discussions**: [GitHub Discussions](https://github.com/gnogeek/jellyfin-guardian/discussions)
 - **📧 Email**: support@gntech.solutions
 
 ---
