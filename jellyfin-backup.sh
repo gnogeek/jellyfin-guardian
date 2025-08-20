@@ -42,6 +42,7 @@ WARNING_SIGN="⚠"
 INFO_ICON="ℹ"
 
 # Default configuration
+DEBUG_MODE=false  # Set to true to enable detailed debug output
 BACKUP_BASE_DIR="$HOME/jellyfin-backups"
 LOG_DIR="$HOME/.local/log"
 CONFIG_DIR="$HOME/.config/gntech"
@@ -216,6 +217,13 @@ log_message() {
         "INFO") echo "[INFO] $message" ;;
         "PROGRESS") echo "[PROGRESS] $message" ;;
     esac
+}
+
+# Debug output function - only shows when DEBUG_MODE is enabled
+debug_echo() {
+    if [ "$DEBUG_MODE" = "true" ]; then
+        echo "[DEBUG] $*"
+    fi
 }
 
 # Database verification function (checks source before backup)
@@ -864,8 +872,8 @@ upload_sftp() {
     local remote_file="$SFTP_PATH/$(basename "$backup_file")"
     
     echo "[INFO] Uploading via SFTP to $SFTP_HOST:$remote_file"
-    echo "[DEBUG] Local file size: $(du -sh "$backup_file" | cut -f1)"
-    echo "[DEBUG] SSH command: ssh -i $SFTP_KEY_FILE -p $SFTP_PORT $SFTP_USER@$SFTP_HOST"
+    debug_echo "Local file size: $(du -sh "$backup_file" | cut -f1)"
+    debug_echo "SSH command: ssh -i $SFTP_KEY_FILE -p $SFTP_PORT $SFTP_USER@$SFTP_HOST"
     
     # Test SSH connection first
     if ! ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o BatchMode=yes "$SFTP_USER@$SFTP_HOST" "echo 'SSH connection test successful'" 2>/dev/null; then
@@ -890,8 +898,8 @@ upload_sftp() {
         local remote_size=$(ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "stat -c%s '$remote_file' 2>/dev/null" || echo "0")
         local local_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
         
-        echo "[DEBUG] Local size: $local_size bytes"
-        echo "[DEBUG] Remote size: $remote_size bytes"
+        debug_echo "Local size: $local_size bytes"
+        debug_echo "Remote size: $remote_size bytes"
         
         if [ "$remote_size" -eq "$local_size" ] && [ "$remote_size" -gt 0 ]; then
             echo "[SUCCESS] File sizes match - upload verified"
@@ -1123,6 +1131,130 @@ test_remote_storage() {
     esac
 }
 
+# Check remote storage state - backups count and storage usage
+check_remote_storage_state() {
+    if [ "$REMOTE_STORAGE_ENABLED" != "true" ]; then
+        echo "[INFO] Remote storage is disabled"
+        return 0
+    fi
+    
+    echo "========================================"
+    echo "Remote Storage State Report"
+    echo "========================================"
+    echo "[INFO] Storage type: $REMOTE_STORAGE_TYPE"
+    echo "[INFO] Checking remote storage usage and backup inventory..."
+    echo
+    
+    case $REMOTE_STORAGE_TYPE in
+        sftp)
+            echo "[INFO] SFTP Server: $SFTP_HOST"
+            echo "[INFO] Remote path: $SFTP_PATH"
+            echo
+            
+            # Test connection first
+            if ! ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 "$SFTP_USER@$SFTP_HOST" "echo 'Connected'" >/dev/null 2>&1; then
+                echo "[ERROR] Cannot connect to SFTP server"
+                return 1
+            fi
+            
+            # Get backup count and sizes
+            local backup_info=$(ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "
+                cd '$SFTP_PATH' 2>/dev/null || { echo 'ERROR: Remote directory not accessible'; exit 1; }
+                
+                # Count total backups
+                total_backups=\$(ls -1 *.tar.gz 2>/dev/null | wc -l)
+                echo \"Total backups: \$total_backups\"
+                
+                # Calculate total storage used
+                total_size=\$(du -sh . 2>/dev/null | cut -f1 || echo 'Unknown')
+                echo \"Total storage used: \$total_size\"
+                
+                # List backups by container
+                echo \"\"
+                echo \"Backups by container:\"
+                for container in \$(ls -1 *.tar.gz 2>/dev/null | sed 's/_[0-9]*_[0-9]*.tar.gz//' | sort -u); do
+                    count=\$(ls -1 \${container}_*.tar.gz 2>/dev/null | wc -l)
+                    size=\$(ls -1 \${container}_*.tar.gz 2>/dev/null | xargs du -ch 2>/dev/null | tail -1 | cut -f1 || echo '0')
+                    latest=\$(ls -1t \${container}_*.tar.gz 2>/dev/null | head -1 | sed 's/.*_\([0-9]*_[0-9]*\).tar.gz/\1/' || echo 'None')
+                    echo \"  \$container: \$count backups, \$size total, latest: \$latest\"
+                done
+                
+                # Show disk space
+                echo \"\"
+                echo \"Remote disk space:\"
+                df -h . 2>/dev/null | tail -1 | awk '{print \"  Total: \" \$2 \", Used: \" \$3 \", Available: \" \$4 \", Use%: \" \$5}' || echo '  Disk info unavailable'
+            " 2>/dev/null)
+            
+            if [ $? -eq 0 ]; then
+                echo "$backup_info"
+            else
+                echo "[ERROR] Failed to retrieve remote storage information"
+                return 1
+            fi
+            ;;
+            
+        s3)
+            echo "[INFO] S3 Bucket: $S3_BUCKET"
+            echo "[INFO] S3 Path: $S3_PATH"
+            echo
+            
+            # Check if AWS CLI is available
+            if ! command -v aws >/dev/null 2>&1; then
+                echo "[ERROR] AWS CLI not installed"
+                return 1
+            fi
+            
+            # Get S3 storage info
+            echo "S3 Storage Summary:"
+            local total_objects=$(aws s3api list-objects-v2 --bucket "$S3_BUCKET" --prefix "$S3_PATH/" --query 'KeyCount' --output text 2>/dev/null || echo "0")
+            local total_size=$(aws s3api list-objects-v2 --bucket "$S3_BUCKET" --prefix "$S3_PATH/" --query 'sum(Contents[].Size)' --output text 2>/dev/null || echo "0")
+            
+            echo "  Total objects: $total_objects"
+            echo "  Total size: $(numfmt --to=iec $total_size 2>/dev/null || echo $total_size) bytes"
+            echo
+            
+            # List by container
+            echo "Backups by container:"
+            aws s3 ls "s3://$S3_BUCKET/$S3_PATH/" --recursive 2>/dev/null | grep "\.tar\.gz$" | while read -r line; do
+                local file=$(echo "$line" | awk '{print $4}' | xargs basename)
+                local container=$(echo "$file" | sed 's/_[0-9]*_[0-9]*.tar.gz//')
+                echo "  $container: $file"
+            done | sort | uniq -c | awk '{print "  " $2 ": " $1 " backups"}'
+            ;;
+            
+        rclone)
+            echo "[INFO] Rclone Remote: $RCLONE_REMOTE"
+            echo "[INFO] Path: $RCLONE_PATH"
+            echo
+            
+            if ! command -v rclone >/dev/null 2>&1; then
+                echo "[ERROR] Rclone not installed"
+                return 1
+            fi
+            
+            # Get rclone storage info
+            echo "Rclone Storage Summary:"
+            rclone size "$RCLONE_REMOTE$RCLONE_PATH" 2>/dev/null || echo "[ERROR] Failed to get storage size"
+            echo
+            
+            echo "Backup files:"
+            rclone ls "$RCLONE_REMOTE$RCLONE_PATH" 2>/dev/null | grep "\.tar\.gz$" | while read -r size file; do
+                local container=$(echo "$file" | sed 's/_[0-9]*_[0-9]*.tar.gz//')
+                echo "  $container: $file ($(numfmt --to=iec $size))"
+            done
+            ;;
+            
+        *)
+            echo "[WARNING] Storage state check not implemented for: $REMOTE_STORAGE_TYPE"
+            return 0
+            ;;
+    esac
+    
+    echo
+    echo "[INFO] Remote storage state check completed"
+    return 0
+}
+
 # Clean up local backups based on retention policy
 cleanup_local_backups() {
     local container_name=$1
@@ -1352,17 +1484,17 @@ backup_container_data() {
     
     # Create log file alongside the backup
     if [ -n "$backup_file" ]; then
-        echo "[DEBUG] Backup file path: $backup_file"
-        echo "[DEBUG] Compression enabled: $ENABLE_COMPRESSION"
+        debug_echo "Backup file path: $backup_file"
+        debug_echo "Compression enabled: $ENABLE_COMPRESSION"
         
         if [ "$ENABLE_COMPRESSION" = "true" ]; then
             # For compressed backups, create log file with same name but .log extension
             log_file="${backup_file%.tar.gz}.log"
             # Ensure the directory exists for the log file
             log_dir=$(dirname "$log_file")
-            echo "[DEBUG] Log file will be: $log_file"
-            echo "[DEBUG] Log directory: $log_dir"
-            echo "[DEBUG] Log directory exists: $([ -d "$log_dir" ] && echo "yes" || echo "no")"
+            debug_echo "Log file will be: $log_file"
+            debug_echo "Log directory: $log_dir"
+            debug_echo "Log directory exists: $([ -d "$log_dir" ] && echo "yes" || echo "no")"
             
             if [ ! -d "$log_dir" ]; then
                 echo "[INFO] Creating log directory: $log_dir"
@@ -1375,13 +1507,13 @@ backup_container_data() {
         else
             # For uncompressed backups, create log file in the backup directory
             log_file="$backup_file/backup.log"
-            echo "[DEBUG] Log file will be: $log_file"
+            debug_echo "Log file will be: $log_file"
         fi
         
         echo
         echo "[INFO] Creating backup log file at: $log_file"
-        echo "[DEBUG] Log file directory: $(dirname "$log_file")"
-        echo "[DEBUG] Directory writable: $([ -w "$(dirname "$log_file")" ] && echo "yes" || echo "no")"
+        debug_echo "Log file directory: $(dirname "$log_file")"
+        debug_echo "Directory writable: $([ -w "$(dirname "$log_file")" ] && echo "yes" || echo "no")"
         
         # Create detailed backup log
         {
@@ -1434,19 +1566,19 @@ backup_container_data() {
             echo "Log created at: $(date)"
         } > "$log_file" 2>&1 || {
             echo "[ERROR] Log file creation failed at: $log_file"
-            echo "[DEBUG] Error details: $?"
-            echo "[DEBUG] Attempting to create log with touch..."
+            debug_echo "Error details: $?"
+            debug_echo "Attempting to create log with touch..."
             if touch "$log_file" 2>/dev/null; then
-                echo "[DEBUG] Touch successful, trying write again..."
-                echo "Test log entry" > "$log_file" 2>/dev/null && echo "[DEBUG] Write test successful" || echo "[DEBUG] Write test failed"
+                debug_echo "Touch successful, trying write again..."
+                echo "Test log entry" > "$log_file" 2>/dev/null && debug_echo "Write test successful" || debug_echo "Write test failed"
             else
-                echo "[DEBUG] Touch failed - directory/permission issue"
+                debug_echo "Touch failed - directory/permission issue"
             fi
-            echo "[DEBUG] Directory permissions: $(ls -ld "$(dirname "$log_file")" 2>/dev/null || echo "Directory not accessible")"
+            debug_echo "Directory permissions: $(ls -ld "$(dirname "$log_file")" 2>/dev/null || echo "Directory not accessible")"
             log_message "WARNING" "Failed to create log file: $log_file"
         }
         
-        echo "[DEBUG] Log file creation completed, checking result..."
+        debug_echo "Log file creation completed, checking result..."
         if [ -f "$log_file" ]; then
             echo "[SUCCESS] Backup log created: $log_file"
             log_message "SUCCESS" "Backup log file created: $log_file"
@@ -1454,26 +1586,24 @@ backup_container_data() {
             echo "[WARNING] Failed to create backup log file at: $log_file"
             log_message "WARNING" "Failed to create backup log file at: $log_file"
         fi
-        echo "[DEBUG] Log file handling completed, proceeding to remote upload check..."
+        debug_echo "Log file handling completed, proceeding to remote upload check..."
     fi
 
-    echo "[DEBUG] Reached remote upload section"
-
-    echo "[DEBUG] Reached remote upload section"
+    debug_echo "Reached remote upload section"
 
     # Upload to remote storage if enabled
-    echo "[DEBUG] Remote upload check:"
+    debug_echo "Remote upload check:"
     echo "  REMOTE_STORAGE_ENABLED: ${REMOTE_STORAGE_ENABLED:-not set}"
     echo "  AUTO_UPLOAD: ${AUTO_UPLOAD:-not set}"
     
     if [ "$REMOTE_STORAGE_ENABLED" = "true" ] && [ "$AUTO_UPLOAD" = "true" ]; then
         echo "[INFO] Starting remote upload..."
-        echo "[DEBUG] Upload parameters:"
-        echo "  Backup file: $backup_file"
-        echo "  File exists: $([ -f "$backup_file" ] && echo "yes" || echo "no")"
-        echo "  File size: $(du -sh "$backup_file" 2>/dev/null | cut -f1 || echo "unknown")"
-        echo "  Container name: $container_name"
-        echo "  Storage type: $REMOTE_STORAGE_TYPE"
+        debug_echo "Upload parameters:"
+        debug_echo "  Backup file: $backup_file"
+        debug_echo "  File exists: $([ -f "$backup_file" ] && echo "yes" || echo "no")"
+        debug_echo "  File size: $(du -sh "$backup_file" 2>/dev/null | cut -f1 || echo "unknown")"
+        debug_echo "  Container name: $container_name"
+        debug_echo "  Storage type: $REMOTE_STORAGE_TYPE"
         
         if upload_to_remote "$backup_file" "$container_name"; then
             echo "[SUCCESS] Remote upload completed successfully"
@@ -1482,9 +1612,9 @@ backup_container_data() {
         fi
     else
         echo "[INFO] Remote upload skipped (not enabled or auto-upload disabled)"
-        echo "[DEBUG] Reasons:"
-        echo "  REMOTE_STORAGE_ENABLED=$REMOTE_STORAGE_ENABLED"
-        echo "  AUTO_UPLOAD=$AUTO_UPLOAD"
+        debug_echo "Reasons:"
+        debug_echo "  REMOTE_STORAGE_ENABLED=$REMOTE_STORAGE_ENABLED"
+        debug_echo "  AUTO_UPLOAD=$AUTO_UPLOAD"
     fi
 
     # Clean up local backups based on retention policy
@@ -1517,10 +1647,12 @@ show_menu() {
     echo -e " ${BLUE}6.${NC} Configure backup settings"
     echo -e " ${BLUE}7.${NC} Configure remote storage"
     echo -e " ${BLUE}8.${NC} Test remote storage connection"
-    echo -e " ${BLUE}9.${NC} Toggle remote backup upload (Current: ${AUTO_UPLOAD:-disabled})"
-    echo -e " ${BLUE}10.${NC} View backup history"
-    echo -e " ${BLUE}11.${NC} Clean up all backups"
-    echo -e " ${BLUE}12.${NC} Exit"
+    echo -e " ${BLUE}9.${NC} Check remote storage state"
+    echo -e " ${BLUE}10.${NC} Toggle remote backup upload (Current: ${AUTO_UPLOAD:-disabled})"
+    echo -e " ${BLUE}11.${NC} Toggle debug mode (Current: ${DEBUG_MODE})"
+    echo -e " ${BLUE}12.${NC} View backup history"
+    echo -e " ${BLUE}13.${NC} Clean up all backups"
+    echo -e " ${BLUE}14.${NC} Exit"
     echo
 }
 
@@ -1528,18 +1660,18 @@ show_menu() {
 get_menu_choice() {
     local choice
     while true; do
-        echo -n -e "${WHITE}Enter your choice (1-12): ${NC}" >&2
+        echo -n -e "${WHITE}Enter your choice (1-14): ${NC}" >&2
         read -r choice
         
         # Validate input
-        if [[ "$choice" =~ ^[1-9]$|^1[0-2]$ ]]; then
+        if [[ "$choice" =~ ^[1-9]$|^1[0-4]$ ]]; then
             echo "$choice"
             return 0
         elif [[ "$choice" =~ ^[Qq]$ ]]; then
-            echo "12"  # Treat 'q' as exit
+            echo "14"  # Treat 'q' as exit
             return 0
         else
-            echo -e "${RED}Invalid choice. Please enter 1-12 or 'q' to quit.${NC}" >&2
+            echo -e "${RED}Invalid choice. Please enter 1-14 or 'q' to quit.${NC}" >&2
         fi
     done
 }
@@ -2164,6 +2296,12 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             9)
+                echo -e "${YELLOW}Checking remote storage state...${NC}"
+                load_remote_config
+                check_remote_storage_state
+                read -p "Press Enter to continue..."
+                ;;
+            10)
                 echo -e "${YELLOW}Toggle Remote Backup Upload${NC}"
                 load_remote_config
                 
@@ -2197,15 +2335,41 @@ main() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            10)
-                view_backup_history
-                read -p "Press Enter to continue..."
-                ;;
             11)
-                cleanup_all_backups
+                echo -e "${YELLOW}Toggle Debug Mode${NC}"
+                echo
+                echo -e "${CYAN}Debug Mode Status:${NC}"
+                echo -e "  Current setting: $DEBUG_MODE"
+                echo
+                
+                if [ "$DEBUG_MODE" = "true" ]; then
+                    echo -n "Debug mode is currently ENABLED. Disable it? (y/N): "
+                    read -r response
+                    if [[ "$response" =~ ^[Yy] ]]; then
+                        DEBUG_MODE=false
+                        echo -e "${GREEN}Debug mode DISABLED${NC}"
+                        echo -e "${CYAN}Debug output will be suppressed${NC}"
+                    fi
+                else
+                    echo -n "Debug mode is currently DISABLED. Enable it? (y/N): "
+                    read -r response
+                    if [[ "$response" =~ ^[Yy] ]]; then
+                        DEBUG_MODE=true
+                        echo -e "${GREEN}Debug mode ENABLED${NC}"
+                        echo -e "${CYAN}Detailed debug output will be shown${NC}"
+                    fi
+                fi
                 read -p "Press Enter to continue..."
                 ;;
             12)
+                view_backup_history
+                read -p "Press Enter to continue..."
+                ;;
+            13)
+                cleanup_all_backups
+                read -p "Press Enter to continue..."
+                ;;
+            14)
                 log_message "INFO" "Backup script terminated by user"
                 echo -e "${GREEN}Thank you for using GNTECH Solutions Backup Script!${NC}"
                 exit 0
