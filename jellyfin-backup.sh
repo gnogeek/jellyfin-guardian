@@ -641,9 +641,10 @@ select_container_interactive() {
     echo
     
     echo -e "${CYAN}Fetching all containers...${NC}"
-    local all_containers=$(timeout 10 docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null)
+    local all_containers=$(timeout 10 docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null || true)
+    local docker_exit_code=$?
     
-    if [ $? -ne 0 ]; then
+    if [ $docker_exit_code -ne 0 ]; then
         echo -e "${RED}Error: Docker command timed out or failed${NC}"
         return 1
     fi
@@ -700,12 +701,17 @@ select_container() {
     
     # First try to find Jellyfin containers automatically (with timeout)
     echo -e "${CYAN}Searching for Jellyfin containers...${NC}"
-    local jellyfin_containers=$(timeout 10 docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null | grep -i jellyfin)
+    local docker_output=$(timeout 10 docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null)
+    local docker_exit_code=$?
     
-    if [ $? -ne 0 ]; then
+    if [ $docker_exit_code -ne 0 ]; then
         echo -e "${RED}Error: Docker command timed out or failed${NC}"
         return 1
     fi
+    
+    local jellyfin_containers=$(echo "$docker_output" | grep -i jellyfin || true)
+    
+    echo -e "${CYAN}Debug: jellyfin_containers result: '$jellyfin_containers'${NC}"
     
     if [ ! -z "$jellyfin_containers" ]; then
         echo -e "${GREEN}${CHECK_MARK} Found Jellyfin containers:${NC}"
@@ -1959,8 +1965,16 @@ main() {
                 fi
                 
                 echo -e "${GREEN}Docker is available and running${NC}"
+                echo -e "${CYAN}Calling select_container function...${NC}"
+                
                 container_name=$(select_container)
-                if [ $? -eq 0 ] && [ ! -z "$container_name" ]; then
+                select_result=$?
+                
+                echo -e "${CYAN}Debug: select_container returned code: $select_result${NC}"
+                echo -e "${CYAN}Debug: container_name: '$container_name'${NC}"
+                
+                if [ $select_result -eq 0 ] && [ ! -z "$container_name" ]; then
+                    echo -e "${GREEN}Container selected: $container_name${NC}"
                     backup_path=$(create_backup_structure)
                     if [ $? -eq 0 ]; then
                         backup_container_data "$container_name" "$backup_path"
@@ -1968,7 +1982,7 @@ main() {
                         echo -e "${RED}Failed to create backup structure${NC}"
                     fi
                 else
-                    echo -e "${YELLOW}Container backup cancelled${NC}"
+                    echo -e "${YELLOW}Container backup cancelled or failed (exit code: $select_result)${NC}"
                 fi
                 read -p "Press Enter to continue..."
                 ;;
