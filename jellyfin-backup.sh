@@ -1965,24 +1965,38 @@ main() {
                 fi
                 
                 echo -e "${GREEN}Docker is available and running${NC}"
-                echo -e "${CYAN}Calling select_container function...${NC}"
                 
-                container_name=$(select_container)
-                select_result=$?
+                # Use a more direct approach similar to command-line mode
+                echo -e "${CYAN}Available containers:${NC}"
+                docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}" 2>/dev/null || {
+                    echo -e "${RED}Failed to list containers${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                }
                 
-                echo -e "${CYAN}Debug: select_container returned code: $select_result${NC}"
-                echo -e "${CYAN}Debug: container_name: '$container_name'${NC}"
+                echo
+                echo -n -e "${WHITE}Enter container name to backup: ${NC}"
+                read -r container_name
                 
-                if [ $select_result -eq 0 ] && [ ! -z "$container_name" ]; then
-                    echo -e "${GREEN}Container selected: $container_name${NC}"
-                    backup_path=$(create_backup_structure)
-                    if [ $? -eq 0 ]; then
-                        backup_container_data "$container_name" "$backup_path"
-                    else
-                        echo -e "${RED}Failed to create backup structure${NC}"
-                    fi
+                if [ -z "$container_name" ]; then
+                    echo -e "${YELLOW}No container specified${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                # Verify container exists
+                if ! docker ps -a --format "{{.Names}}" | grep -q "^${container_name}$"; then
+                    echo -e "${RED}Container '$container_name' not found${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                echo -e "${GREEN}Container selected: $container_name${NC}"
+                backup_path=$(create_backup_structure)
+                if [ $? -eq 0 ]; then
+                    backup_container_data "$container_name" "$backup_path"
                 else
-                    echo -e "${YELLOW}Container backup cancelled or failed (exit code: $select_result)${NC}"
+                    echo -e "${RED}Failed to create backup structure${NC}"
                 fi
                 read -p "Press Enter to continue..."
                 ;;
