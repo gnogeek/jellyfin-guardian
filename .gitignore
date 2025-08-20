@@ -52,3 +52,9 @@ archive/*/
 # Test data
 test-data/
 sample-backups/
+
+# Docker test environment files
+docker-compose.test.yml
+setup-test-env.sh
+cleanup-test-env.sh
+TEST-README.md
