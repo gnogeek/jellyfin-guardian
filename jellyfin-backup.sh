@@ -1324,13 +1324,17 @@ backup_container_data() {
         if [ "$ENABLE_COMPRESSION" = "true" ]; then
             # For compressed backups, create log file with same name but .log extension
             log_file="${backup_file%.tar.gz}.log"
+            # Ensure the directory exists for the log file
+            log_dir=$(dirname "$log_file")
+            [ ! -d "$log_dir" ] && mkdir -p "$log_dir" 2>/dev/null
         else
             # For uncompressed backups, create log file in the backup directory
             log_file="$backup_file/backup.log"
         fi
         
         echo
-        echo "[INFO] Creating backup log file..."
+        echo "[INFO] Creating backup log file at: $log_file"
+        echo "[DEBUG] Log file directory: $(dirname "$log_file")"
         
         # Create detailed backup log
         {
@@ -1382,7 +1386,10 @@ backup_container_data() {
             echo
             echo "Log created at: $(date)"
         } > "$log_file" 2>/dev/null || {
-            echo "[WARNING] Log file creation failed, continuing with backup process"
+            echo "[WARNING] Log file creation failed at: $log_file"
+            echo "[DEBUG] Checking directory permissions: $(dirname "$log_file")"
+            echo "[DEBUG] Directory exists: $([ -d "$(dirname "$log_file")" ] && echo "yes" || echo "no")"
+            echo "[DEBUG] Directory writable: $([ -w "$(dirname "$log_file")" ] && echo "yes" || echo "no")"
             log_message "WARNING" "Failed to create log file: $log_file"
         }
         
