@@ -1383,6 +1383,7 @@ backup_container_data() {
             echo "Log created at: $(date)"
         } > "$log_file" 2>/dev/null
         
+        echo "[DEBUG] Log file creation completed, checking result..."
         if [ -f "$log_file" ]; then
             echo "[SUCCESS] Backup log created: $log_file"
             log_message "SUCCESS" "Backup log file created: $log_file"
@@ -1390,7 +1391,12 @@ backup_container_data() {
             echo "[WARNING] Failed to create backup log file at: $log_file"
             log_message "WARNING" "Failed to create backup log file at: $log_file"
         fi
+        echo "[DEBUG] Log file handling completed, proceeding to remote upload check..."
     fi
+
+    echo "[DEBUG] Reached remote upload section"
+
+    echo "[DEBUG] Reached remote upload section"
 
     # Upload to remote storage if enabled
     echo "[DEBUG] Remote upload check:"
