@@ -268,27 +268,27 @@ create_compressed_backup() {
     local backup_dir=$2
     local source_dir="/opt/$container_name"
     
-    echo "[INFO] Creating compressed backup directly from source..."
+    echo "[INFO] Creating compressed backup directly from source..." >&2
     
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local compressed_file="${backup_dir}/${container_name}_${timestamp}.tar.gz"
     
     # Check available compression tools and use the best one
     if command -v pigz >/dev/null 2>&1; then
-        echo "[INFO] Using pigz (parallel gzip) for faster compression..."
-        echo "[INFO] Source: $source_dir"
-        echo "[INFO] Target: $compressed_file"
-        echo "[INFO] Starting compressed backup with progress..."
+        echo "[INFO] Using pigz (parallel gzip) for faster compression..." >&2
+        echo "[INFO] Source: $source_dir" >&2
+        echo "[INFO] Target: $compressed_file" >&2
+        echo "[INFO] Starting compressed backup with progress..." >&2
         
         # Use tar with pigz and show progress using pv if available
         if command -v pv >/dev/null 2>&1; then
-            echo "[INFO] Using pv for progress display"
+            echo "[INFO] Using pv for progress display" >&2
             local source_size=$(du -sb "$source_dir" 2>/dev/null | cut -f1 || echo "0")
             if [ "$source_size" -gt 0 ]; then
-                echo "[INFO] Estimated source size: $(du -sh "$source_dir" | cut -f1)"
-                echo "[INFO] Starting compression with live progress..."
-                echo "Progress format: [Data rate] [Progress] [Time elapsed] [ETA]"
-                echo
+                echo "[INFO] Estimated source size: $(du -sh "$source_dir" | cut -f1)" >&2
+                echo "[INFO] Starting compression with live progress..." >&2
+                echo "Progress format: [Data rate] [Progress] [Time elapsed] [ETA]" >&2
+                echo >&2
                 tar -C "$(dirname "$source_dir")" \
                     --exclude='logs/*' \
                     --exclude='cache/*' \
@@ -300,12 +300,12 @@ create_compressed_backup() {
                     -cf - "$(basename "$source_dir")" \
                     | pv -f -p -t -e -r -b -s "$source_size" \
                     | pigz -6 > "$compressed_file"
-                echo
-                echo "[INFO] Compression completed"
+                echo >&2
+                echo "[INFO] Compression completed" >&2
             else
-                echo "[WARNING] Could not determine source size, using basic progress"
-                echo "[INFO] Starting compression (progress without percentage)..."
-                echo
+                echo "[WARNING] Could not determine source size, using basic progress" >&2
+                echo "[INFO] Starting compression (progress without percentage)..." >&2
+                echo >&2
                 tar -C "$(dirname "$source_dir")" \
                     --exclude='logs/*' \
                     --exclude='cache/*' \
@@ -317,21 +317,21 @@ create_compressed_backup() {
                     -cf - "$(basename "$source_dir")" \
                     | pv -f -t -e -r -b \
                     | pigz -6 > "$compressed_file"
-                echo
-                echo "[INFO] Compression completed"
+                echo >&2
+                echo "[INFO] Compression completed" >&2
             fi
         else
             # Fallback without pv - try to install it first
-            echo "[INFO] pv not available - attempting to install for progress display..."
+            echo "[INFO] pv not available - attempting to install for progress display..." >&2
             if command -v apt-get >/dev/null 2>&1; then
-                echo "[INFO] Installing pv..."
+                echo "[INFO] Installing pv..." >&2
                 sudo apt-get update -qq && sudo apt-get install -y pv >/dev/null 2>&1 || true
                 if command -v pv >/dev/null 2>&1; then
-                    echo "[SUCCESS] pv installed! Restarting compression with progress..."
+                    echo "[SUCCESS] pv installed! Restarting compression with progress..." >&2
                     local source_size=$(du -sb "$source_dir" 2>/dev/null | cut -f1 || echo "0")
-                    echo "[INFO] Estimated source size: $(du -sh "$source_dir" | cut -f1)"
-                    echo "[INFO] Compressing with progress bar..."
-                    echo
+                    echo "[INFO] Estimated source size: $(du -sh "$source_dir" | cut -f1)" >&2
+                    echo "[INFO] Compressing with progress bar..." >&2
+                    echo >&2
                     tar -C "$(dirname "$source_dir")" \
                         --exclude='logs/*' \
                         --exclude='cache/*' \
@@ -343,10 +343,10 @@ create_compressed_backup() {
                         -cf - "$(basename "$source_dir")" \
                         | pv -p -t -e -r -b -s "$source_size" -N "Compressing" \
                         | pigz -6 > "$compressed_file"
-                    echo
+                    echo >&2
                 else
-                    echo "[WARNING] Failed to install pv, using basic compression"
-                    echo "[INFO] Compressing without progress display..."
+                    echo "[WARNING] Failed to install pv, using basic compression" >&2
+                    echo "[INFO] Compressing without progress display..." >&2
                     tar -C "$(dirname "$source_dir")" \
                         --exclude='logs/*' \
                         --exclude='cache/*' \
@@ -359,8 +359,8 @@ create_compressed_backup() {
                         | pigz -6 > "$compressed_file"
                 fi
             else
-                echo "[WARNING] Cannot install pv (unsupported package manager)"
-                echo "[INFO] Compressing without progress display..."
+                echo "[WARNING] Cannot install pv (unsupported package manager)" >&2
+                echo "[INFO] Compressing without progress display..." >&2
                 tar -C "$(dirname "$source_dir")" \
                     --exclude='logs/*' \
                     --exclude='cache/*' \
@@ -374,16 +374,16 @@ create_compressed_backup() {
             fi
         fi
     elif command -v gzip >/dev/null 2>&1; then
-        echo "[INFO] Using standard gzip compression..."
-        echo "[INFO] Source: $source_dir"
-        echo "[INFO] Target: $compressed_file"
+        echo "[INFO] Using standard gzip compression..." >&2
+        echo "[INFO] Source: $source_dir" >&2
+        echo "[INFO] Target: $compressed_file" >&2
         
         # Use tar with progress indication if pv is available
         if command -v pv >/dev/null 2>&1; then
             local source_size=$(du -sb "$source_dir" 2>/dev/null | cut -f1 || echo "0")
-            echo "[INFO] Estimated source size: $(du -sh "$source_dir" | cut -f1)"
-            echo "[INFO] Compressing with progress bar..."
-            echo
+            echo "[INFO] Estimated source size: $(du -sh "$source_dir" | cut -f1)" >&2
+            echo "[INFO] Compressing with progress bar..." >&2
+            echo >&2
             tar -C "$(dirname "$source_dir")" \
                 --exclude='logs/*' \
                 --exclude='cache/*' \
@@ -395,9 +395,9 @@ create_compressed_backup() {
                 -cf - "$(basename "$source_dir")" \
                 | pv -p -t -e -r -b -s "$source_size" -N "Compressing" \
                 | gzip -6 > "$compressed_file"
-            echo
+            echo >&2
         else
-            echo "[INFO] Compressing with verbose output for progress indication..."
+            echo "[INFO] Compressing with verbose output for progress indication..." >&2
             tar -C "$(dirname "$source_dir")" \
                 --exclude='logs/*' \
                 --exclude='cache/*' \
@@ -411,20 +411,20 @@ create_compressed_backup() {
                 "$(basename "$source_dir")"
         fi
     else
-        echo "[ERROR] No compression tools available (gzip/pigz not found)"
+        echo "[ERROR] No compression tools available (gzip/pigz not found)" >&2
         return 1
     fi
     
     if [ $? -eq 0 ] && [ -f "$compressed_file" ]; then
         local compressed_size=$(du -sh "$compressed_file" | cut -f1)
         local original_size=$(du -sh "$source_dir" | cut -f1)
-        echo "[SUCCESS] Compressed backup created successfully"
-        echo "[INFO] Original size: $original_size | Compressed size: $compressed_size"
-        echo "[INFO] Backup file: $compressed_file"
+        echo "[SUCCESS] Compressed backup created successfully" >&2
+        echo "[INFO] Original size: $original_size | Compressed size: $compressed_size" >&2
+        echo "[INFO] Backup file: $compressed_file" >&2
         echo "$compressed_file"  # Return the path for further processing
         return 0
     else
-        echo "[ERROR] Backup compression failed"
+        echo "[ERROR] Backup compression failed" >&2
         return 1
     fi
 }
