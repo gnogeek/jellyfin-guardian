@@ -1352,21 +1352,36 @@ backup_container_data() {
     
     # Create log file alongside the backup
     if [ -n "$backup_file" ]; then
-        local log_file
+        echo "[DEBUG] Backup file path: $backup_file"
+        echo "[DEBUG] Compression enabled: $ENABLE_COMPRESSION"
+        
         if [ "$ENABLE_COMPRESSION" = "true" ]; then
             # For compressed backups, create log file with same name but .log extension
             log_file="${backup_file%.tar.gz}.log"
             # Ensure the directory exists for the log file
             log_dir=$(dirname "$log_file")
-            [ ! -d "$log_dir" ] && mkdir -p "$log_dir" 2>/dev/null
+            echo "[DEBUG] Log file will be: $log_file"
+            echo "[DEBUG] Log directory: $log_dir"
+            echo "[DEBUG] Log directory exists: $([ -d "$log_dir" ] && echo "yes" || echo "no")"
+            
+            if [ ! -d "$log_dir" ]; then
+                echo "[INFO] Creating log directory: $log_dir"
+                if mkdir -p "$log_dir" 2>/dev/null; then
+                    echo "[SUCCESS] Log directory created"
+                else
+                    echo "[ERROR] Failed to create log directory"
+                fi
+            fi
         else
             # For uncompressed backups, create log file in the backup directory
             log_file="$backup_file/backup.log"
+            echo "[DEBUG] Log file will be: $log_file"
         fi
         
         echo
         echo "[INFO] Creating backup log file at: $log_file"
         echo "[DEBUG] Log file directory: $(dirname "$log_file")"
+        echo "[DEBUG] Directory writable: $([ -w "$(dirname "$log_file")" ] && echo "yes" || echo "no")"
         
         # Create detailed backup log
         {
@@ -1417,11 +1432,17 @@ backup_container_data() {
             fi
             echo
             echo "Log created at: $(date)"
-        } > "$log_file" 2>/dev/null || {
-            echo "[WARNING] Log file creation failed at: $log_file"
-            echo "[DEBUG] Checking directory permissions: $(dirname "$log_file")"
-            echo "[DEBUG] Directory exists: $([ -d "$(dirname "$log_file")" ] && echo "yes" || echo "no")"
-            echo "[DEBUG] Directory writable: $([ -w "$(dirname "$log_file")" ] && echo "yes" || echo "no")"
+        } > "$log_file" 2>&1 || {
+            echo "[ERROR] Log file creation failed at: $log_file"
+            echo "[DEBUG] Error details: $?"
+            echo "[DEBUG] Attempting to create log with touch..."
+            if touch "$log_file" 2>/dev/null; then
+                echo "[DEBUG] Touch successful, trying write again..."
+                echo "Test log entry" > "$log_file" 2>/dev/null && echo "[DEBUG] Write test successful" || echo "[DEBUG] Write test failed"
+            else
+                echo "[DEBUG] Touch failed - directory/permission issue"
+            fi
+            echo "[DEBUG] Directory permissions: $(ls -ld "$(dirname "$log_file")" 2>/dev/null || echo "Directory not accessible")"
             log_message "WARNING" "Failed to create log file: $log_file"
         }
         
