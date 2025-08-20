@@ -1918,11 +1918,15 @@ main() {
                 ;;
             3)
                 container_name=$(select_container)
-                if [ ! -z "$container_name" ]; then
+                if [ $? -eq 0 ] && [ ! -z "$container_name" ]; then
                     backup_path=$(create_backup_structure)
                     if [ $? -eq 0 ]; then
                         backup_container_data "$container_name" "$backup_path"
+                    else
+                        echo -e "${RED}Failed to create backup structure${NC}"
                     fi
+                else
+                    echo -e "${YELLOW}Container backup cancelled${NC}"
                 fi
                 read -p "Press Enter to continue..."
                 ;;
