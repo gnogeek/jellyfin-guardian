@@ -1611,11 +1611,22 @@ parse_arguments() {
                 shift
                 ;;
             --configure-remote)
+                # Try different locations for the configure script
                 if [ -f "$SCRIPT_DIR/scripts/configure-remote.sh" ]; then
+                    # Running from git repository
                     "$SCRIPT_DIR/scripts/configure-remote.sh"
+                    exit 0
+                elif [ -f "$SCRIPT_DIR/jellyfin-guardian-configure" ]; then
+                    # Installed version - script is in same directory
+                    "$SCRIPT_DIR/jellyfin-guardian-configure"
+                    exit 0
+                elif command -v jellyfin-guardian-configure >/dev/null 2>&1; then
+                    # Installed version - script is in PATH
+                    jellyfin-guardian-configure
                     exit 0
                 else
                     echo "[ERROR] Remote configuration script not found"
+                    echo "[INFO] Please ensure jellyfin-guardian is properly installed"
                     exit 1
                 fi
                 ;;
@@ -1930,10 +1941,19 @@ main() {
                 ;;
             7)
                 echo -e "${YELLOW}Configuring remote storage...${NC}"
+                # Try different locations for the configure script
                 if [ -f "$SCRIPT_DIR/scripts/configure-remote.sh" ]; then
+                    # Running from git repository
                     "$SCRIPT_DIR/scripts/configure-remote.sh"
+                elif [ -f "$SCRIPT_DIR/jellyfin-guardian-configure" ]; then
+                    # Installed version - script is in same directory
+                    "$SCRIPT_DIR/jellyfin-guardian-configure"
+                elif command -v jellyfin-guardian-configure >/dev/null 2>&1; then
+                    # Installed version - script is in PATH
+                    jellyfin-guardian-configure
                 else
                     echo -e "${RED}Remote configuration script not found${NC}"
+                    echo -e "${YELLOW}Please ensure jellyfin-guardian is properly installed${NC}"
                 fi
                 read -p "Press Enter to continue..."
                 ;;

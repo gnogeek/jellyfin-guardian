@@ -6,7 +6,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/../config/jellyfin-backup-remote.conf"
+
+# Determine config file location based on installation type
+if [ -f "$SCRIPT_DIR/../config/jellyfin-backup-remote.conf" ]; then
+    # Running from git repository
+    CONFIG_FILE="$SCRIPT_DIR/../config/jellyfin-backup-remote.conf"
+elif [ -f "$HOME/.config/gntech/jellyfin-backup-remote.conf" ]; then
+    # User installation
+    CONFIG_FILE="$HOME/.config/gntech/jellyfin-backup-remote.conf"
+elif [ -f "/etc/gntech/jellyfin-backup-remote.conf" ]; then
+    # System installation
+    CONFIG_FILE="/etc/gntech/jellyfin-backup-remote.conf"
+else
+    echo "Error: Could not find jellyfin-backup-remote.conf"
+    echo "Please ensure jellyfin-guardian is properly installed."
+    exit 1
+fi
+
 TEMP_CONFIG="/tmp/jellyfin-remote-config-$$.tmp"
 
 # Colors for output
