@@ -640,7 +640,13 @@ select_container_interactive() {
     echo -e "${CYAN}Interactive Container Selection${NC}"
     echo
     
-    local all_containers=$(docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null)
+    echo -e "${CYAN}Fetching all containers...${NC}"
+    local all_containers=$(timeout 10 docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Docker command timed out or failed${NC}"
+        return 1
+    fi
     
     if [ -z "$all_containers" ]; then
         echo -e "${RED}${CROSS_MARK} No containers found on this system${NC}"
@@ -692,8 +698,14 @@ select_container() {
     echo -e "${CYAN}Container Selection${NC}"
     echo
     
-    # First try to find Jellyfin containers automatically
-    local jellyfin_containers=$(docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null | grep -i jellyfin)
+    # First try to find Jellyfin containers automatically (with timeout)
+    echo -e "${CYAN}Searching for Jellyfin containers...${NC}"
+    local jellyfin_containers=$(timeout 10 docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.State}}" 2>/dev/null | grep -i jellyfin)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Docker command timed out or failed${NC}"
+        return 1
+    fi
     
     if [ ! -z "$jellyfin_containers" ]; then
         echo -e "${GREEN}${CHECK_MARK} Found Jellyfin containers:${NC}"
@@ -1938,13 +1950,15 @@ main() {
                     continue
                 fi
                 
-                # Debug: Check if Docker daemon is running
-                if ! docker info >/dev/null 2>&1; then
-                    echo -e "${RED}Error: Docker daemon is not running${NC}"
+                # Debug: Check if Docker daemon is running (with timeout)
+                echo -e "${CYAN}Checking Docker daemon status...${NC}"
+                if ! timeout 5 docker info >/dev/null 2>&1; then
+                    echo -e "${RED}Error: Docker daemon is not running or not responding${NC}"
                     read -p "Press Enter to continue..."
                     continue
                 fi
                 
+                echo -e "${GREEN}Docker is available and running${NC}"
                 container_name=$(select_container)
                 if [ $? -eq 0 ] && [ ! -z "$container_name" ]; then
                     backup_path=$(create_backup_structure)
