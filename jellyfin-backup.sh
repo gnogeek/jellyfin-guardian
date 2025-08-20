@@ -55,6 +55,7 @@ AUTO_REMOVE_UNCOMPRESSED=false
 
 # Remote storage defaults
 REMOTE_STORAGE_ENABLED=false
+AUTO_UPLOAD=false
 
 # Determine remote config file location based on installation type
 if [ -f "$SCRIPT_DIR/config/jellyfin-backup-remote.conf" ]; then
@@ -74,12 +75,18 @@ fi
 # Load remote storage configuration if exists
 load_remote_config() {
     if [ -f "$REMOTE_CONFIG_FILE" ]; then
-        log_message "INFO" "Loading remote storage configuration"
+        log_message "INFO" "Loading remote storage configuration from: $REMOTE_CONFIG_FILE"
         source "$REMOTE_CONFIG_FILE"
+        
+        log_message "INFO" "Remote config loaded - REMOTE_STORAGE_ENABLED: ${REMOTE_STORAGE_ENABLED}, AUTO_UPLOAD: ${AUTO_UPLOAD:-not set}"
         
         if [ "$REMOTE_STORAGE_ENABLED" = "true" ]; then
             log_message "INFO" "Remote storage enabled: $REMOTE_STORAGE_TYPE"
+        else
+            log_message "INFO" "Remote storage is disabled"
         fi
+    else
+        log_message "WARNING" "Remote configuration file not found: $REMOTE_CONFIG_FILE"
     fi
 }
 
