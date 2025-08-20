@@ -1311,6 +1311,437 @@ create_backup_structure() {
     fi
 }
 
+# ============================================================================
+# RESTORE FUNCTIONS
+# ============================================================================
+
+# List available backups for restore
+list_available_backups() {
+    echo "========================================"
+    echo "Available Backups for Restore"
+    echo "========================================"
+    echo
+    
+    local backup_list=()
+    local backup_paths=()
+    local count=0
+    
+    echo "[INFO] Scanning local backups..."
+    
+    # Check local backups
+    if [ -d "$BACKUP_BASE_DIR" ]; then
+        while IFS= read -r -d '' backup_file; do
+            if [ -f "$backup_file" ]; then
+                count=$((count + 1))
+                local filename=$(basename "$backup_file")
+                local container_name=$(echo "$filename" | sed 's/_[0-9]*_[0-9]*.tar.gz//')
+                local timestamp=$(echo "$filename" | sed 's/.*_\([0-9]*_[0-9]*\).tar.gz/\1/')
+                local size=$(du -sh "$backup_file" 2>/dev/null | cut -f1 || echo "Unknown")
+                local date_formatted=$(echo "$timestamp" | sed 's/\([0-9]\{8\}\)_\([0-9]\{6\}\)/\1 \2/' | awk '{print substr($1,1,4)"-"substr($1,5,2)"-"substr($1,7,2)" "substr($2,1,2)":"substr($2,3,2)":"substr($2,5,2)}')
+                
+                backup_list+=("$count. $container_name ($date_formatted) - $size")
+                backup_paths+=("$backup_file")
+                
+                echo "$count. Container: $container_name"
+                echo "   Date: $date_formatted"
+                echo "   Size: $size"
+                echo "   File: $filename"
+                echo
+            fi
+        done < <(find "$BACKUP_BASE_DIR" -name "*.tar.gz" -type f -print0 2>/dev/null | sort -z)
+    fi
+    
+    # Check remote backups if enabled
+    if [ "$REMOTE_STORAGE_ENABLED" = "true" ]; then
+        echo "[INFO] Checking remote backups..."
+        
+        case $REMOTE_STORAGE_TYPE in
+            sftp)
+                if ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$SFTP_USER@$SFTP_HOST" "echo 'Connected'" >/dev/null 2>&1; then
+                    echo "[INFO] Connected to remote storage, listing backups..."
+                    local remote_files=$(timeout 30 ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$SFTP_USER@$SFTP_HOST" "
+                        cd '$SFTP_PATH' 2>/dev/null || exit 1
+                        ls -1t *.tar.gz 2>/dev/null | head -10
+                    " 2>/dev/null)
+                    
+                    if [ -n "$remote_files" ]; then
+                        echo "[INFO] Remote backups found:"
+                        while IFS= read -r remote_file; do
+                            if [ -n "$remote_file" ]; then
+                                count=$((count + 1))
+                                local container_name=$(echo "$remote_file" | sed 's/_[0-9]*_[0-9]*.tar.gz//')
+                                backup_list+=("$count. $container_name (REMOTE) - $remote_file")
+                                backup_paths+=("REMOTE:$remote_file")
+                                
+                                echo "$count. Container: $container_name (REMOTE)"
+                                echo "   File: $remote_file"
+                                echo
+                            fi
+                        done <<< "$remote_files"
+                    else
+                        echo "[INFO] No remote backups found"
+                    fi
+                else
+                    echo "[WARNING] Cannot connect to remote storage"
+                fi
+                ;;
+        esac
+    fi
+    
+    if [ $count -eq 0 ]; then
+        echo "[INFO] No backups found"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Select backup by number
+select_backup_by_number() {
+    local backup_list=()
+    local backup_paths=()
+    local count=0
+    
+    # Rebuild backup list (same logic as list_available_backups)
+    if [ -d "$BACKUP_BASE_DIR" ]; then
+        while IFS= read -r -d '' backup_file; do
+            if [ -f "$backup_file" ]; then
+                count=$((count + 1))
+                backup_paths+=("$backup_file")
+            fi
+        done < <(find "$BACKUP_BASE_DIR" -name "*.tar.gz" -type f -print0 2>/dev/null | sort -z)
+    fi
+    
+    # Check remote backups if enabled
+    if [ "$REMOTE_STORAGE_ENABLED" = "true" ]; then
+        case $REMOTE_STORAGE_TYPE in
+            sftp)
+                if ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$SFTP_USER@$SFTP_HOST" "echo 'Connected'" >/dev/null 2>&1; then
+                    local remote_files=$(timeout 30 ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$SFTP_USER@$SFTP_HOST" "
+                        cd '$SFTP_PATH' 2>/dev/null || exit 1
+                        ls -1t *.tar.gz 2>/dev/null | head -10
+                    " 2>/dev/null)
+                    
+                    if [ -n "$remote_files" ]; then
+                        while IFS= read -r remote_file; do
+                            if [ -n "$remote_file" ]; then
+                                count=$((count + 1))
+                                backup_paths+=("REMOTE:$remote_file")
+                            fi
+                        done <<< "$remote_files"
+                    fi
+                fi
+                ;;
+        esac
+    fi
+    
+    if [ $count -eq 0 ]; then
+        echo "[ERROR] No backups available"
+        return 1
+    fi
+    
+    echo
+    printf "Select backup number (1-$count) or 'q' to quit: "
+    read -r selection
+    
+    if [ "$selection" = "q" ] || [ "$selection" = "Q" ]; then
+        echo "[INFO] Selection cancelled"
+        return 1
+    fi
+    
+    if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt $count ]; then
+        echo "[ERROR] Invalid selection. Please choose 1-$count"
+        return 1
+    fi
+    
+    local selected_backup="${backup_paths[$((selection-1))]}"
+    echo "$selected_backup"
+    return 0
+}
+
+# Download backup from remote storage
+download_remote_backup() {
+    local remote_filename=$1
+    local local_temp_dir=$2
+    
+    echo "[INFO] Downloading backup from remote storage..." >&2
+    
+    case $REMOTE_STORAGE_TYPE in
+        sftp)
+            local local_file="$local_temp_dir/$remote_filename"
+            echo "[INFO] Downloading: $remote_filename" >&2
+            if scp -i "$SFTP_KEY_FILE" -P "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST:$SFTP_PATH/$remote_filename" "$local_file" 2>/dev/null; then
+                echo "[SUCCESS] Download completed: $local_file" >&2
+                echo "$local_file"
+                return 0
+            else
+                echo "[ERROR] Download failed" >&2
+                return 1
+            fi
+            ;;
+        s3)
+            local local_file="$local_temp_dir/$remote_filename"
+            echo "[INFO] Downloading from S3: $remote_filename" >&2
+            if aws s3 cp "s3://$S3_BUCKET/$S3_PATH/$remote_filename" "$local_file" 2>/dev/null; then
+                echo "[SUCCESS] Download completed: $local_file" >&2
+                echo "$local_file"
+                return 0
+            else
+                echo "[ERROR] S3 download failed" >&2
+                return 1
+            fi
+            ;;
+        *)
+            echo "[ERROR] Remote download not implemented for: $REMOTE_STORAGE_TYPE" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Verify backup integrity before restore
+verify_backup_integrity() {
+    local backup_file=$1
+    
+    echo "[INFO] Verifying backup integrity..."
+    
+    # Check if file exists and is readable
+    if [ ! -f "$backup_file" ]; then
+        echo "[ERROR] Backup file not found: $backup_file"
+        return 1
+    fi
+    
+    if [ ! -r "$backup_file" ]; then
+        echo "[ERROR] Backup file not readable: $backup_file"
+        return 1
+    fi
+    
+    # Test tar file integrity
+    echo "[INFO] Testing archive integrity..."
+    if tar -tzf "$backup_file" >/dev/null 2>&1; then
+        echo "[SUCCESS] Archive integrity verified"
+        return 0
+    else
+        echo "[ERROR] Archive integrity check failed"
+        return 1
+    fi
+}
+
+# Preview backup contents
+preview_backup_contents() {
+    local backup_file=$1
+    
+    echo "========================================"
+    echo "Backup Contents Preview"
+    echo "========================================"
+    echo "[INFO] Listing contents of: $(basename "$backup_file")"
+    echo
+    
+    echo "Directory structure:"
+    tar -tzf "$backup_file" 2>/dev/null | head -20 | while read -r file; do
+        echo "  $file"
+    done
+    
+    local total_files=$(tar -tzf "$backup_file" 2>/dev/null | wc -l)
+    echo
+    echo "[INFO] Total files in backup: $total_files"
+    
+    # Show database files specifically
+    echo
+    echo "Database files found:"
+    tar -tzf "$backup_file" 2>/dev/null | grep -E "\\.db$" | while read -r db_file; do
+        echo "  $db_file"
+    done
+}
+
+# Restore backup to container
+restore_backup() {
+    local backup_file=$1
+    local target_container=$2
+    local create_safety_backup=${3:-true}
+    
+    echo "========================================"
+    echo "Starting Restore Process"
+    echo "========================================"
+    echo "[INFO] Backup file: $(basename "$backup_file")"
+    echo "[INFO] Target container: $target_container"
+    echo
+    
+    # Verify backup exists and is valid
+    if ! verify_backup_integrity "$backup_file"; then
+        echo "[ERROR] Backup verification failed"
+        return 1
+    fi
+    
+    # Get container information
+    local container_exists=$(docker ps -a --format "{{.Names}}" | grep -x "$target_container" || echo "")
+    local container_running=""
+    
+    if [ -n "$container_exists" ]; then
+        container_running=$(docker ps --format "{{.Names}}" | grep -x "$target_container" || echo "")
+        echo "[INFO] Container exists and is $([ -n "$container_running" ] && echo "running" || echo "stopped")"
+    else
+        echo "[WARNING] Container '$target_container' does not exist"
+        echo -n "Create new container location? (y/N): "
+        read -r response
+        if [[ ! "$response" =~ ^[Yy] ]]; then
+            echo "[INFO] Restore cancelled"
+            return 1
+        fi
+    fi
+    
+    # Determine target directory
+    local target_dir="/opt/$target_container"
+    echo "[INFO] Target directory: $target_dir"
+    
+    # Create safety backup if requested and target exists
+    if [ "$create_safety_backup" = "true" ] && [ -d "$target_dir" ] && [ -n "$(ls -A "$target_dir" 2>/dev/null)" ]; then
+        echo
+        echo "[WARNING] Target directory contains data"
+        printf "Create safety backup before restore? (Y/n): "
+        read -r response
+        if [[ ! "$response" =~ ^[Nn] ]]; then
+            echo "[INFO] Creating safety backup..."
+            local safety_backup_dir="$BACKUP_BASE_DIR/safety-backup-$(date '+%Y%m%d_%H%M%S')"
+            mkdir -p "$safety_backup_dir"
+            
+            local safety_file="$safety_backup_dir/${target_container}_safety_$(date '+%Y%m%d_%H%M%S').tar.gz"
+            echo "[INFO] Safety backup: $safety_file"
+            
+            tar -czf "$safety_file" -C "/opt" "$target_container" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo "[SUCCESS] Safety backup created"
+            else
+                echo "[WARNING] Safety backup failed, but continuing..."
+            fi
+        fi
+    fi
+    
+    # Stop container if running
+    if [ -n "$container_running" ]; then
+        echo
+        echo -e "${YELLOW}⚠️  SAFETY NOTICE: Container is RUNNING and will be STOPPED${NC}"
+        echo -e "${YELLOW}   This is required to prevent data corruption during restore${NC}"
+        echo
+        printf "Continue with container stop? (y/N): "
+        read -r response
+        if [[ ! "$response" =~ ^[Yy] ]]; then
+            echo "[INFO] Restore cancelled by user"
+            return 1
+        fi
+        
+        echo "[INFO] Stopping container..."
+        if docker stop "$target_container" >/dev/null 2>&1; then
+            echo "[SUCCESS] Container stopped"
+        else
+            echo "[ERROR] Failed to stop container"
+            return 1
+        fi
+    fi
+    
+    # Create target directory if it doesn't exist
+    if [ ! -d "$target_dir" ]; then
+        echo "[INFO] Creating target directory..."
+        sudo mkdir -p "$target_dir"
+        sudo chown -R $USER:$USER "$target_dir"
+    fi
+    
+    # COMPLETELY REMOVE existing data
+    echo
+    echo -e "${RED}⚠️  WARNING: All existing data in $target_dir will be PERMANENTLY DELETED${NC}"
+    printf "Are you absolutely sure you want to continue? (y/N): "
+    read -r response
+    if [[ ! "$response" =~ ^[Yy] ]]; then
+        echo "[INFO] Restore cancelled by user"
+        
+        # Restart container if it was running
+        if [ -n "$container_running" ]; then
+            echo "[INFO] Restarting container..."
+            docker start "$target_container" >/dev/null 2>&1
+        fi
+        return 1
+    fi
+    
+    echo "[INFO] Removing all existing data..."
+    sudo rm -rf "$target_dir"/*
+    sudo rm -rf "$target_dir"/.*  2>/dev/null || true  # Remove hidden files, ignore errors
+    echo "[SUCCESS] Existing data removed"
+    
+    # Extract backup
+    echo
+    echo "[INFO] Extracting backup to $target_dir..."
+    echo "[INFO] This may take several minutes for large backups..."
+    
+    # Extract with progress if pv is available
+    if command -v pv >/dev/null 2>&1; then
+        local backup_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
+        echo "[INFO] Backup size: $(numfmt --to=iec $backup_size 2>/dev/null || echo "Unknown")"
+        pv -p -t -e -r -b -s "$backup_size" "$backup_file" | tar -xzf - -C "/opt/" 2>/dev/null
+    else
+        tar -xzf "$backup_file" -C "/opt/" 2>/dev/null
+    fi
+    
+    if [ $? -eq 0 ]; then
+        echo "[SUCCESS] Backup extracted successfully"
+        
+        # Fix permissions
+        echo "[INFO] Fixing ownership and permissions..."
+        sudo chown -R $USER:$USER "$target_dir"
+        chmod -R 755 "$target_dir"
+        
+        # Verify extraction
+        if [ -d "$target_dir" ] && [ -n "$(ls -A "$target_dir" 2>/dev/null)" ]; then
+            echo "[SUCCESS] Restore completed successfully"
+            
+            # Restart container if it was running
+            if [ -n "$container_running" ]; then
+                echo
+                echo "[INFO] Starting container..."
+                if docker start "$target_container" >/dev/null 2>&1; then
+                    echo "[SUCCESS] Container started successfully"
+                    
+                    # Wait a moment and check if it's actually running
+                    sleep 3
+                    if docker ps --format "{{.Names}}" | grep -x "$target_container" >/dev/null; then
+                        echo "[SUCCESS] Container is running normally"
+                    else
+                        echo "[WARNING] Container may have issues - please check logs"
+                    fi
+                else
+                    echo "[WARNING] Container start failed - please start manually"
+                    echo "[INFO] Command: docker start $target_container"
+                fi
+            fi
+            
+            echo
+            echo "========================================"
+            echo "Restore Summary"
+            echo "========================================"
+            echo "  Container: $target_container"
+            echo "  Restored to: $target_dir"
+            echo "  Backup file: $backup_file"
+            echo "  Status: $([ -n "$container_running" ] && echo "Container restarted" || echo "Container not running")"
+            echo
+            
+            local restored_size=$(du -sh "$target_dir" 2>/dev/null | cut -f1 || echo "Unknown")
+            echo "  Restored data size: $restored_size"
+            
+            return 0
+        else
+            echo "[ERROR] Extraction verification failed"
+            return 1
+        fi
+    else
+        echo "[ERROR] Failed to extract backup"
+        
+        # Restart container if it was running
+        if [ -n "$container_running" ]; then
+            echo "[INFO] Attempting to restart container..."
+            docker start "$target_container" >/dev/null 2>&1
+        fi
+        return 1
+    fi
+}
+
 # Backup container data (optimized: verify first, then compress directly)
 backup_container_data() {
     local container_name=$1
@@ -1643,16 +2074,17 @@ show_menu() {
     echo -e " ${BLUE}2.${NC} List all available containers"
     echo -e " ${BLUE}3.${NC} Backup specific container"
     echo -e " ${BLUE}4.${NC} Backup all Jellyfin containers"
-    echo -e " ${BLUE}5.${NC} View container mounts"
-    echo -e " ${BLUE}6.${NC} Configure backup settings"
-    echo -e " ${BLUE}7.${NC} Configure remote storage"
-    echo -e " ${BLUE}8.${NC} Test remote storage connection"
-    echo -e " ${BLUE}9.${NC} Check remote storage state"
-    echo -e " ${BLUE}10.${NC} Toggle remote backup upload (Current: ${AUTO_UPLOAD:-disabled})"
-    echo -e " ${BLUE}11.${NC} Toggle debug mode (Current: ${DEBUG_MODE})"
-    echo -e " ${BLUE}12.${NC} View backup history"
-    echo -e " ${BLUE}13.${NC} Clean up all backups"
-    echo -e " ${BLUE}14.${NC} Exit"
+    echo -e " ${BLUE}5.${NC} Restore from backup"
+    echo -e " ${BLUE}6.${NC} View container mounts"
+    echo -e " ${BLUE}7.${NC} Configure backup settings"
+    echo -e " ${BLUE}8.${NC} Configure remote storage"
+    echo -e " ${BLUE}9.${NC} Test remote storage connection"
+    echo -e " ${BLUE}10.${NC} Check remote storage state"
+    echo -e " ${BLUE}11.${NC} Toggle remote backup upload (Current: ${AUTO_UPLOAD:-disabled})"
+    echo -e " ${BLUE}12.${NC} Toggle debug mode (Current: ${DEBUG_MODE})"
+    echo -e " ${BLUE}13.${NC} View backup history"
+    echo -e " ${BLUE}14.${NC} Clean up all backups"
+    echo -e " ${BLUE}15.${NC} Exit"
     echo
 }
 
@@ -1660,18 +2092,18 @@ show_menu() {
 get_menu_choice() {
     local choice
     while true; do
-        echo -n -e "${WHITE}Enter your choice (1-14): ${NC}" >&2
+        echo -n -e "${WHITE}Enter your choice (1-15): ${NC}" >&2
         read -r choice
         
         # Validate input
-        if [[ "$choice" =~ ^[1-9]$|^1[0-4]$ ]]; then
+        if [[ "$choice" =~ ^[1-9]$|^1[0-5]$ ]]; then
             echo "$choice"
             return 0
         elif [[ "$choice" =~ ^[Qq]$ ]]; then
-            echo "14"  # Treat 'q' as exit
+            echo "15"  # Treat 'q' as exit
             return 0
         else
-            echo -e "${RED}Invalid choice. Please enter 1-14 or 'q' to quit.${NC}" >&2
+            echo -e "${RED}Invalid choice. Please enter 1-15 or 'q' to quit.${NC}" >&2
         fi
     done
 }
@@ -2260,6 +2692,179 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             5)
+                echo -e "${YELLOW}Starting restore process...${NC}"
+                load_remote_config
+                
+                # Show available backups with timeout for remote check
+                echo "[INFO] Checking local and remote backups..."
+                echo "[INFO] This may take a moment for remote storage..."
+                
+                # Try to list backups with timeout
+                local backup_list_success=false
+                if list_available_backups 2>/dev/null; then
+                    backup_list_success=true
+                else
+                    echo
+                    echo -e "${YELLOW}Remote backup check timed out or failed${NC}"
+                    echo -e "${CYAN}Continuing with local backups only...${NC}"
+                    
+                    # List only local backups
+                    echo "========================================"
+                    echo "Available Local Backups for Restore"
+                    echo "========================================"
+                    echo
+                    
+                    local count=0
+                    if [ -d "$BACKUP_BASE_DIR" ]; then
+                        while IFS= read -r -d '' backup_file; do
+                            if [ -f "$backup_file" ]; then
+                                count=$((count + 1))
+                                local filename=$(basename "$backup_file")
+                                local container_name=$(echo "$filename" | sed 's/_[0-9]*_[0-9]*.tar.gz//')
+                                local timestamp=$(echo "$filename" | sed 's/.*_\([0-9]*_[0-9]*\).tar.gz/\1/')
+                                local size=$(du -sh "$backup_file" 2>/dev/null | cut -f1 || echo "Unknown")
+                                local date_formatted=$(echo "$timestamp" | sed 's/\([0-9]\{8\}\)_\([0-9]\{6\}\)/\1 \2/' | awk '{print substr($1,1,4)"-"substr($1,5,2)"-"substr($1,7,2)" "substr($2,1,2)":"substr($2,3,2)":"substr($2,5,2)}')
+                                
+                                echo "$count. Container: $container_name"
+                                echo "   Date: $date_formatted"
+                                echo "   Size: $size"
+                                echo "   File: $filename"
+                                echo
+                            fi
+                        done < <(find "$BACKUP_BASE_DIR" -name "*.tar.gz" -type f -print0 2>/dev/null | sort -z)
+                    fi
+                    
+                    if [ $count -eq 0 ]; then
+                        echo -e "${YELLOW}No local backups available for restore${NC}"
+                        read -p "Press Enter to continue..."
+                        continue
+                    fi
+                fi
+                
+                # Select backup by number
+                echo
+                printf "Select backup number (1-5) or 'q' to quit: "
+                read -r selection
+                
+                if [ "$selection" = "q" ] || [ "$selection" = "Q" ]; then
+                    echo "[INFO] Restore cancelled"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt 5 ]; then
+                    echo "[ERROR] Invalid selection. Please choose 1-5"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                # Build backup arrays to map selection numbers to files
+                local backup_files=()
+                local backup_types=()
+                local count=0
+                
+                # Add local backups
+                if [ -d "$BACKUP_BASE_DIR" ]; then
+                    while IFS= read -r -d '' backup_file; do
+                        if [ -f "$backup_file" ]; then
+                            count=$((count + 1))
+                            backup_files+=("$backup_file")
+                            backup_types+=("LOCAL")
+                        fi
+                    done < <(find "$BACKUP_BASE_DIR" -name "*.tar.gz" -type f -print0 2>/dev/null | sort -z)
+                fi
+                
+                # Add remote backups if available
+                if [ "$REMOTE_STORAGE_ENABLED" = "true" ]; then
+                    case $REMOTE_STORAGE_TYPE in
+                        sftp)
+                            if ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$SFTP_USER@$SFTP_HOST" "echo 'Connected'" >/dev/null 2>&1; then
+                                local remote_files=$(timeout 30 ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$SFTP_USER@$SFTP_HOST" "
+                                    cd '$SFTP_PATH' 2>/dev/null || exit 1
+                                    ls -1t *.tar.gz 2>/dev/null | head -10
+                                " 2>/dev/null)
+                                
+                                if [ -n "$remote_files" ]; then
+                                    while IFS= read -r remote_file; do
+                                        if [ -n "$remote_file" ]; then
+                                            count=$((count + 1))
+                                            backup_files+=("$remote_file")
+                                            backup_types+=("REMOTE")
+                                        fi
+                                    done <<< "$remote_files"
+                                fi
+                            fi
+                            ;;
+                    esac
+                fi
+                
+                # Validate selection range
+                if [ "$selection" -gt ${#backup_files[@]} ]; then
+                    echo "[ERROR] Invalid selection. Please choose 1-${#backup_files[@]}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                # Get selected backup info
+                local selected_index=$((selection - 1))
+                local selected_file="${backup_files[$selected_index]}"
+                local selected_type="${backup_types[$selected_index]}"
+                
+                if [ -z "$selected_file" ]; then
+                    echo -e "${YELLOW}No backup selected${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                # Handle backup based on type
+                local backup_file=""
+                if [ "$selected_type" = "LOCAL" ]; then
+                    backup_file="$selected_file"
+                    echo "[INFO] Selected local backup: $backup_file"
+                elif [ "$selected_type" = "REMOTE" ]; then
+                    echo "[INFO] Selected remote backup: $selected_file"
+                    echo "[INFO] Downloading remote backup..."
+                    
+                    local temp_dir="/tmp/jellyfin-restore-$$"
+                    mkdir -p "$temp_dir"
+                    backup_file=$(download_remote_backup "$selected_file" "$temp_dir")
+                    if [ $? -ne 0 ]; then
+                        echo -e "${RED}Failed to download remote backup${NC}"
+                        rm -rf "$temp_dir"
+                        read -p "Press Enter to continue..."
+                        continue
+                    fi
+                else
+                    echo "[ERROR] Unknown backup type: $selected_type"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                # Get target container name
+                echo
+                printf "Enter target container name: "
+                read -r target_container
+                
+                if [ -z "$target_container" ]; then
+                    echo -e "${YELLOW}No target container specified${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                # Perform restore
+                echo
+                if restore_backup "$backup_file" "$target_container"; then
+                    echo -e "${GREEN}Restore completed successfully!${NC}"
+                else
+                    echo -e "${RED}Restore failed${NC}"
+                fi
+                
+                # Cleanup temp files for remote backups
+                [ -d "/tmp/jellyfin-restore-$$" ] && rm -rf "/tmp/jellyfin-restore-$$"
+                
+                read -p "Press Enter to continue..."
+                ;;
+            6)
                 container_name=$(select_container)
                 if [ ! -z "$container_name" ]; then
                     echo -e "${YELLOW}Mount points for $container_name:${NC}"
@@ -2267,11 +2872,11 @@ main() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            6)
+            7)
                 configure_settings
                 read -p "Press Enter to continue..."
                 ;;
-            7)
+            8)
                 echo -e "${YELLOW}Configuring remote storage...${NC}"
                 # Try different locations for the configure script
                 if [ -f "$SCRIPT_DIR/scripts/configure-remote.sh" ]; then
@@ -2289,19 +2894,19 @@ main() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            8)
+            9)
                 echo -e "${YELLOW}Testing remote storage connection...${NC}"
                 load_remote_config
                 test_remote_storage
                 read -p "Press Enter to continue..."
                 ;;
-            9)
+            10)
                 echo -e "${YELLOW}Checking remote storage state...${NC}"
                 load_remote_config
                 check_remote_storage_state
                 read -p "Press Enter to continue..."
                 ;;
-            10)
+            11)
                 echo -e "${YELLOW}Toggle Remote Backup Upload${NC}"
                 load_remote_config
                 
@@ -2331,11 +2936,11 @@ main() {
                     fi
                 else
                     echo -e "${YELLOW}Remote storage is not configured or enabled.${NC}"
-                    echo -e "${CYAN}Please configure remote storage first (option 7).${NC}"
+                    echo -e "${CYAN}Please configure remote storage first (option 8).${NC}"
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            11)
+            12)
                 echo -e "${YELLOW}Toggle Debug Mode${NC}"
                 echo
                 echo -e "${CYAN}Debug Mode Status:${NC}"
@@ -2361,15 +2966,15 @@ main() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            12)
+            13)
                 view_backup_history
                 read -p "Press Enter to continue..."
                 ;;
-            13)
+            14)
                 cleanup_all_backups
                 read -p "Press Enter to continue..."
                 ;;
-            14)
+            15)
                 log_message "INFO" "Backup script terminated by user"
                 echo -e "${GREEN}Thank you for using GNTECH Solutions Backup Script!${NC}"
                 exit 0

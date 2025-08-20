@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  jellyfin-test:
+    image: ghcr.io/hotio/jellyfin:release
+    container_name: jellyfin-test
+    restart: unless-stopped
+    ports:
+      - "8096:8096"  # Web UI
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+    volumes:
+      # Config directory mounted to /opt/jellyfin-test (this is what gets backed up)
+      - /opt/jellyfin-test:/config
+      # Test media directories (optional - for realistic testing)
+      - ./test-data/movies:/data/movies:ro
+      - ./test-data/tvshows:/data/tvshows:ro
+      - ./test-data/music:/data/music:ro
