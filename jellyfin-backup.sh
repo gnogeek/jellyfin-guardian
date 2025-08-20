@@ -1362,7 +1362,7 @@ backup_container_data() {
             echo "[SUCCESS] Backup log created: $log_file"
             log_message "SUCCESS" "Backup log file created: $log_file"
         else
-            echo "[WARNING] Failed to create backup log file"
+            echo "[WARNING] Failed to create backup log file at: $log_file"
             log_message "WARNING" "Failed to create backup log file at: $log_file"
         fi
     fi
