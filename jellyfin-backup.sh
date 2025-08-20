@@ -55,7 +55,21 @@ AUTO_REMOVE_UNCOMPRESSED=false
 
 # Remote storage defaults
 REMOTE_STORAGE_ENABLED=false
-REMOTE_CONFIG_FILE="$SCRIPT_DIR/config/jellyfin-backup-remote.conf"
+
+# Determine remote config file location based on installation type
+if [ -f "$SCRIPT_DIR/config/jellyfin-backup-remote.conf" ]; then
+    # Running from git repository
+    REMOTE_CONFIG_FILE="$SCRIPT_DIR/config/jellyfin-backup-remote.conf"
+elif [ -f "$HOME/.config/gntech/jellyfin-backup-remote.conf" ]; then
+    # User installation
+    REMOTE_CONFIG_FILE="$HOME/.config/gntech/jellyfin-backup-remote.conf"
+elif [ -f "/etc/gntech/jellyfin-backup-remote.conf" ]; then
+    # System installation
+    REMOTE_CONFIG_FILE="/etc/gntech/jellyfin-backup-remote.conf"
+else
+    # Default fallback (will be checked in load_remote_config)
+    REMOTE_CONFIG_FILE="$SCRIPT_DIR/config/jellyfin-backup-remote.conf"
+fi
 
 # Load remote storage configuration if exists
 load_remote_config() {
