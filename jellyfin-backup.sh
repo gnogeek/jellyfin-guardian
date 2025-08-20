@@ -90,6 +90,24 @@ load_remote_config() {
     fi
 }
 
+# Update AUTO_UPLOAD setting in configuration file
+update_auto_upload_config() {
+    local new_value=$1
+    
+    if [ -f "$REMOTE_CONFIG_FILE" ]; then
+        # Use sed to update the AUTO_UPLOAD line
+        if grep -q "^AUTO_UPLOAD=" "$REMOTE_CONFIG_FILE"; then
+            sed -i "s/^AUTO_UPLOAD=.*/AUTO_UPLOAD=$new_value/" "$REMOTE_CONFIG_FILE"
+        else
+            # Add the line if it doesn't exist
+            echo "AUTO_UPLOAD=$new_value" >> "$REMOTE_CONFIG_FILE"
+        fi
+        log_message "INFO" "Updated AUTO_UPLOAD to $new_value in configuration file"
+    else
+        log_message "WARNING" "Cannot update configuration - file not found: $REMOTE_CONFIG_FILE"
+    fi
+}
+
 # Ensure directories exist
 ensure_directories() {
     mkdir -p "$BACKUP_BASE_DIR" "$LOG_DIR" "$CONFIG_DIR"
@@ -1420,9 +1438,10 @@ show_menu() {
     echo -e " ${BLUE}6.${NC} Configure backup settings"
     echo -e " ${BLUE}7.${NC} Configure remote storage"
     echo -e " ${BLUE}8.${NC} Test remote storage connection"
-    echo -e " ${BLUE}9.${NC} View backup history"
-    echo -e " ${BLUE}10.${NC} Clean up all backups"
-    echo -e " ${BLUE}11.${NC} Exit"
+    echo -e " ${BLUE}9.${NC} Toggle remote backup upload (Current: ${AUTO_UPLOAD:-disabled})"
+    echo -e " ${BLUE}10.${NC} View backup history"
+    echo -e " ${BLUE}11.${NC} Clean up all backups"
+    echo -e " ${BLUE}12.${NC} Exit"
     echo
 }
 
@@ -1430,18 +1449,18 @@ show_menu() {
 get_menu_choice() {
     local choice
     while true; do
-        echo -n -e "${WHITE}Enter your choice (1-11): ${NC}" >&2
+        echo -n -e "${WHITE}Enter your choice (1-12): ${NC}" >&2
         read -r choice
         
         # Validate input
-        if [[ "$choice" =~ ^[1-9]$|^1[01]$ ]]; then
+        if [[ "$choice" =~ ^[1-9]$|^1[0-2]$ ]]; then
             echo "$choice"
             return 0
         elif [[ "$choice" =~ ^[Qq]$ ]]; then
-            echo "11"  # Treat 'q' as exit
+            echo "12"  # Treat 'q' as exit
             return 0
         else
-            echo -e "${RED}Invalid choice. Please enter 1-11 or 'q' to quit.${NC}" >&2
+            echo -e "${RED}Invalid choice. Please enter 1-12 or 'q' to quit.${NC}" >&2
         fi
     done
 }
@@ -2066,14 +2085,48 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             9)
-                view_backup_history
+                echo -e "${YELLOW}Toggle Remote Backup Upload${NC}"
+                load_remote_config
+                
+                if [ "$REMOTE_STORAGE_ENABLED" = "true" ]; then
+                    echo
+                    echo -e "${CYAN}Remote Storage Status:${NC}"
+                    echo -e "  Storage Type: $REMOTE_STORAGE_TYPE"
+                    echo -e "  Auto Upload: ${AUTO_UPLOAD:-disabled}"
+                    echo
+                    
+                    if [ "$AUTO_UPLOAD" = "true" ]; then
+                        echo -n "Auto upload is currently ENABLED. Disable it? (y/N): "
+                        read -r response
+                        if [[ "$response" =~ ^[Yy] ]]; then
+                            AUTO_UPLOAD=false
+                            update_auto_upload_config "false"
+                            echo -e "${GREEN}Remote auto upload DISABLED${NC}"
+                        fi
+                    else
+                        echo -n "Auto upload is currently DISABLED. Enable it? (y/N): "
+                        read -r response
+                        if [[ "$response" =~ ^[Yy] ]]; then
+                            AUTO_UPLOAD=true
+                            update_auto_upload_config "true"
+                            echo -e "${GREEN}Remote auto upload ENABLED${NC}"
+                        fi
+                    fi
+                else
+                    echo -e "${YELLOW}Remote storage is not configured or enabled.${NC}"
+                    echo -e "${CYAN}Please configure remote storage first (option 7).${NC}"
+                fi
                 read -p "Press Enter to continue..."
                 ;;
             10)
-                cleanup_all_backups
+                view_backup_history
                 read -p "Press Enter to continue..."
                 ;;
             11)
+                cleanup_all_backups
+                read -p "Press Enter to continue..."
+                ;;
+            12)
                 log_message "INFO" "Backup script terminated by user"
                 echo -e "${GREEN}Thank you for using GNTECH Solutions Backup Script!${NC}"
                 exit 0
