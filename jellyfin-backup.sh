@@ -1397,9 +1397,21 @@ show_menu() {
 # Get menu choice
 get_menu_choice() {
     local choice
-    echo -n -e "${WHITE}Enter your choice (1-11): ${NC}" >&2
-    read choice
-    echo "$choice"
+    while true; do
+        echo -n -e "${WHITE}Enter your choice (1-11): ${NC}" >&2
+        read -r choice
+        
+        # Validate input
+        if [[ "$choice" =~ ^[1-9]$|^1[01]$ ]]; then
+            echo "$choice"
+            return 0
+        elif [[ "$choice" =~ ^[Qq]$ ]]; then
+            echo "11"  # Treat 'q' as exit
+            return 0
+        else
+            echo -e "${RED}Invalid choice. Please enter 1-11 or 'q' to quit.${NC}" >&2
+        fi
+    done
 }
 
 # Configure settings
@@ -1917,6 +1929,22 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             3)
+                echo -e "${YELLOW}Starting container backup process...${NC}"
+                
+                # Debug: Check if Docker is available
+                if ! command -v docker >/dev/null 2>&1; then
+                    echo -e "${RED}Error: Docker is not installed or not in PATH${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
+                # Debug: Check if Docker daemon is running
+                if ! docker info >/dev/null 2>&1; then
+                    echo -e "${RED}Error: Docker daemon is not running${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                
                 container_name=$(select_container)
                 if [ $? -eq 0 ] && [ ! -z "$container_name" ]; then
                     backup_path=$(create_backup_structure)
