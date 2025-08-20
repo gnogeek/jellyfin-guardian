@@ -1381,7 +1381,10 @@ backup_container_data() {
             fi
             echo
             echo "Log created at: $(date)"
-        } > "$log_file" 2>/dev/null
+        } > "$log_file" 2>/dev/null || {
+            echo "[WARNING] Log file creation failed, continuing with backup process"
+            log_message "WARNING" "Failed to create log file: $log_file"
+        }
         
         echo "[DEBUG] Log file creation completed, checking result..."
         if [ -f "$log_file" ]; then
