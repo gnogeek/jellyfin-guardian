@@ -864,15 +864,47 @@ upload_sftp() {
     local remote_file="$SFTP_PATH/$(basename "$backup_file")"
     
     echo "[INFO] Uploading via SFTP to $SFTP_HOST:$remote_file"
+    echo "[DEBUG] Local file size: $(du -sh "$backup_file" | cut -f1)"
+    echo "[DEBUG] SSH command: ssh -i $SFTP_KEY_FILE -p $SFTP_PORT $SFTP_USER@$SFTP_HOST"
+    
+    # Test SSH connection first
+    if ! ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" -o ConnectTimeout=10 -o BatchMode=yes "$SFTP_USER@$SFTP_HOST" "echo 'SSH connection test successful'" 2>/dev/null; then
+        echo "[ERROR] SSH connection failed to $SFTP_USER@$SFTP_HOST"
+        return 1
+    fi
     
     # Ensure remote directory exists
-    ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "mkdir -p $SFTP_PATH" 2>/dev/null
+    echo "[INFO] Creating remote directory if needed..."
+    if ! ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "mkdir -p '$SFTP_PATH'" 2>/dev/null; then
+        echo "[ERROR] Failed to create remote directory: $SFTP_PATH"
+        return 1
+    fi
     
-    # Upload with progress
-    if command -v pv >/dev/null 2>&1; then
-        pv "$backup_file" | ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "cat > $remote_file"
+    # Use scp instead of ssh pipe for reliability
+    echo "[INFO] Starting file transfer..."
+    if scp -i "$SFTP_KEY_FILE" -P "$SFTP_PORT" -o ConnectTimeout=30 -o ServerAliveInterval=60 -v "$backup_file" "$SFTP_USER@$SFTP_HOST:$remote_file"; then
+        echo "[SUCCESS] File uploaded successfully"
+        
+        # Verify remote file size
+        echo "[INFO] Verifying remote file..."
+        local remote_size=$(ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "stat -c%s '$remote_file' 2>/dev/null" || echo "0")
+        local local_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
+        
+        echo "[DEBUG] Local size: $local_size bytes"
+        echo "[DEBUG] Remote size: $remote_size bytes"
+        
+        if [ "$remote_size" -eq "$local_size" ] && [ "$remote_size" -gt 0 ]; then
+            echo "[SUCCESS] File sizes match - upload verified"
+            return 0
+        else
+            echo "[ERROR] File size mismatch - upload may have failed"
+            echo "[ERROR] Removing incomplete remote file..."
+            ssh -i "$SFTP_KEY_FILE" -p "$SFTP_PORT" "$SFTP_USER@$SFTP_HOST" "rm -f '$remote_file'" 2>/dev/null
+            return 1
+        fi
     else
-        scp -i "$SFTP_KEY_FILE" -P "$SFTP_PORT" "$backup_file" "$SFTP_USER@$SFTP_HOST:$remote_file"
+        echo "[ERROR] SCP upload failed"
+        return 1
     fi
 }
 
@@ -1415,6 +1447,13 @@ backup_container_data() {
     
     if [ "$REMOTE_STORAGE_ENABLED" = "true" ] && [ "$AUTO_UPLOAD" = "true" ]; then
         echo "[INFO] Starting remote upload..."
+        echo "[DEBUG] Upload parameters:"
+        echo "  Backup file: $backup_file"
+        echo "  File exists: $([ -f "$backup_file" ] && echo "yes" || echo "no")"
+        echo "  File size: $(du -sh "$backup_file" 2>/dev/null | cut -f1 || echo "unknown")"
+        echo "  Container name: $container_name"
+        echo "  Storage type: $REMOTE_STORAGE_TYPE"
+        
         if upload_to_remote "$backup_file" "$container_name"; then
             echo "[SUCCESS] Remote upload completed successfully"
         else
@@ -1422,6 +1461,9 @@ backup_container_data() {
         fi
     else
         echo "[INFO] Remote upload skipped (not enabled or auto-upload disabled)"
+        echo "[DEBUG] Reasons:"
+        echo "  REMOTE_STORAGE_ENABLED=$REMOTE_STORAGE_ENABLED"
+        echo "  AUTO_UPLOAD=$AUTO_UPLOAD"
     fi
 
     # Clean up local backups based on retention policy
