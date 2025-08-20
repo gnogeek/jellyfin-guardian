@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/jellyfin-backup-remote.conf"
+CONFIG_FILE="$SCRIPT_DIR/../config/jellyfin-backup-remote.conf"
 TEMP_CONFIG="/tmp/jellyfin-remote-config-$$.tmp"
 
 # Colors for output
