@@ -1368,12 +1368,19 @@ backup_container_data() {
     fi
 
     # Upload to remote storage if enabled
+    echo "[DEBUG] Remote upload check:"
+    echo "  REMOTE_STORAGE_ENABLED: ${REMOTE_STORAGE_ENABLED:-not set}"
+    echo "  AUTO_UPLOAD: ${AUTO_UPLOAD:-not set}"
+    
     if [ "$REMOTE_STORAGE_ENABLED" = "true" ] && [ "$AUTO_UPLOAD" = "true" ]; then
+        echo "[INFO] Starting remote upload..."
         if upload_to_remote "$backup_file" "$container_name"; then
             echo "[SUCCESS] Remote upload completed successfully"
         else
             echo "[WARNING] Remote upload failed, backup remains local"
         fi
+    else
+        echo "[INFO] Remote upload skipped (not enabled or auto-upload disabled)"
     fi
 
     # Clean up local backups based on retention policy
